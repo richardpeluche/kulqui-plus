@@ -1,4 +1,4 @@
-const V = 'kulqui-v11';
+const V = 'kulqui-v12';
 const FILES = ['./', 'index.html', 'app.js', 'styles.css', 'manifest.json', 'icon.svg', 'icon-192.png', 'icon-512.png', 'import.js', 'xlsx.core.min.js'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(V).then(c => c.addAll(FILES))); });
 self.addEventListener('message', e => { if (e.data === 'skip') self.skipWaiting(); });

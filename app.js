@@ -269,19 +269,19 @@ setInterval(() => {
 }, 60000);
 
 /* ===== Panel de licencias (solo propietario) ===== */
-const msgClave = (c, tipo) => `Tu clave de Kulqui+ (${tipo === 'free' ? 'prueba de 5 días' : 'premium anual'}): ${c}\n\n1. Abre ${SITIO}\n2. Escribe la clave y toca Activar.`;
+const msgClave = (c, tipo) => `Tu clave de Kulqui+ (${tipo === 'free' ? 'prueba de 5 días' : tipo === 'vida' ? 'premium de por vida' : 'premium anual'}): ${c}\n\n1. Abre ${SITIO}\n2. Escribe la clave y toca Activar.`;
 async function abrirLicencias() {
   openModal('<h2>Licencias</h2><p class="m">Cargando…</p>');
   try {
     const l = await rpc('listar_licencias');
     openModal(`<h2>Licencias</h2>
     <form onsubmit="nuevaLicencia(event)"><div class="two">
-      <div><label>Tipo</label><select name="tipo"><option value="premium">Premium (365 días, 1 dispositivo)</option><option value="free">Free (5 días, varios dispositivos)</option></select></div>
+      <div><label>Tipo</label><select name="tipo"><option value="premium">Premium anual (365 días, 1 dispositivo)</option><option value="vida">Premium de por vida (1 dispositivo)</option><option value="free">Free (5 días, varios dispositivos)</option></select></div>
       <div><label>Nota</label><input name="nota" placeholder="Nombre del cliente"></div></div>
       <div class="bar"><button>Generar clave</button><button type="button" class="sec" onclick="closeModal()">Cerrar</button></div></form>
-    ${l.map(x => `<div class="row"><div><b>${esc(x.codigo)}</b> <span class="badge ${x.tipo === 'premium' ? 'ok' : ''}">${x.tipo}</span>${x.activa ? '' : ' <span class="badge bad">desactivada</span>'}
+    ${l.map(x => (x.tipo = x.tipo === 'premium' && x.dias >= 36500 ? 'vida' : x.tipo, `<div class="row"><div><b>${esc(x.codigo)}</b> <span class="badge ${x.tipo !== 'free' ? 'ok' : ''}">${x.tipo === 'vida' ? 'de por vida' : x.tipo}</span>${x.activa ? '' : ' <span class="badge bad">desactivada</span>'}
       <div class="m">${esc(x.nota)} · ${x.dispositivos} dispositivo(s)${x.primera ? ' · desde ' + fdate(String(x.primera).slice(0, 10)) : ''}</div></div>
-      <div class="bar"><button class="sec sm" onclick="copiarClave('${x.codigo}','${x.tipo}')">Copiar</button>${x.tipo === 'premium' ? `<button class="sec sm" onclick="licAccion('liberar_licencia','${x.codigo}')">Liberar</button>` : ''}<button class="sec sm" onclick="licAccion('cambiar_estado_licencia','${x.codigo}',${!x.activa})">${x.activa ? 'Desactivar' : 'Activar'}</button></div></div>`).join('')}`);
+      <div class="bar"><button class="sec sm" onclick="copiarClave('${x.codigo}','${x.tipo}')">Copiar</button>${x.tipo !== 'free' ? `<button class="sec sm" onclick="licAccion('liberar_licencia','${x.codigo}')">Liberar</button>` : ''}<button class="sec sm" onclick="licAccion('cambiar_estado_licencia','${x.codigo}',${!x.activa})">${x.activa ? 'Desactivar' : 'Activar'}</button></div></div>`)).join('')}`);
   } catch (x) { openModal(`<h2>Licencias</h2><p class="err">${esc(msgErr(x))}</p><button onclick="closeModal()">Cerrar</button>`); }
 }
 async function copiarClave(c, tipo) {
