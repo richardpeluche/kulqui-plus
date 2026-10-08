@@ -10,10 +10,11 @@
 <link rel="apple-touch-icon" href="icon-192.png">
 <link rel="stylesheet" href="styles.css">
 </head>
-<body>
+<body class="locked">
 <header>
   <h1>Kulqui+ <small id="sync" style="font-size:11px;font-weight:400;opacity:.8"></small></h1>
   <select id="cajaSel" aria-label="Caja activa"></select>
+  <button class="sm sec" style="color:#fff;border-color:#fff" onclick="lock()">Bloquear</button>
 </header>
 <main id="app"></main>
 <nav>
@@ -24,6 +25,7 @@
   <a href="#/reportes" data-v="reportes">Reportes</a>
 </nav>
 <div id="modal" class="modal" hidden></div>
+<div id="lock" class="lock"></div>
 <script src="app.js"></script>
 </body>
 </html>

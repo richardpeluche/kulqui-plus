@@ -43,3 +43,10 @@ th:first-child,td:first-child,td.l,th.l{text-align:left}
 .empty{text-align:center;color:var(--m);padding:26px 10px}
 .pos{color:var(--ok)}.neg{color:var(--bad)}
 @media print{header,nav,.bar,.noprint,.modal{display:none!important}body{background:#fff;color:#000;padding:0}.card,.stat{border-color:#999}}
+.lock{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;z-index:50;padding:20px}
+.lock[hidden]{display:none}
+.lockbox{width:100%;max-width:340px;background:var(--card);border:1px solid var(--b);border-radius:16px;padding:22px;display:grid;gap:10px;text-align:center}
+.lockbox h1{margin:0;color:var(--p)}
+.err{color:var(--bad);min-height:18px;font-size:13px}
+body.locked header,body.locked main,body.locked nav{display:none}
+@media print{.lock{display:none!important}}

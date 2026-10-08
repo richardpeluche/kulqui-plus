@@ -14,9 +14,11 @@ const TB = {
 const seed = () => ({ cajas: [], socios: [], prestamos: [], reuniones: [], ingresos: [], cajaActiva: null });
 let db = (() => { try { return JSON.parse(localStorage.getItem(KEY)) || seed(); } catch (e) { return seed(); } })();
 db.ingresos = db.ingresos || [];
+let PW = '', locked = true, idle, fallos = 0;
+const enc = s => btoa(String.fromCharCode(...new TextEncoder().encode(s)));
 const setSync = t => { const e = document.querySelector('#sync'); if (e) e.textContent = t; };
 async function sb(path, opt = {}) {
-  const r = await fetch(SB + path, { ...opt, headers: { apikey: SBK, Authorization: 'Bearer ' + SBK, 'Content-Type': 'application/json', ...(opt.headers || {}) } });
+  const r = await fetch(SB + path, { ...opt, headers: { apikey: SBK, Authorization: 'Bearer ' + SBK, 'Content-Type': 'application/json', 'x-kulqui-key': enc(PW), ...(opt.headers || {}) } });
   if (!r.ok) throw new Error(await r.text());
   return r.json().catch(() => null);
 }
@@ -25,6 +27,7 @@ async function push() {
   if (pushing) { again = true; return; }
   pushing = true; setSync('Guardando…');
   try {
+    if (!(await claveOk())) { pushing = false; return lock('La contraseña cambió. Ingresa de nuevo.'); }
     for (const t of TBL) {
       const rows = db[t].map(TB[t].to), keep = new Set(rows.map(r => r.id));
       if (rows.length) await sb(t + '?on_conflict=id', { method: 'POST', headers: { Prefer: 'resolution=merge-duplicates,return=minimal' }, body: JSON.stringify(rows) });
@@ -45,6 +48,7 @@ async function pull() {
   if (localStorage.getItem(DIRTY)) return push();
   try {
     setSync('Sincronizando…');
+    if (!(await claveOk())) return lock('La contraseña cambió. Ingresa de nuevo.');
     const d = {};
     for (const t of TBL) d[t] = (await sb(t + '?select=*')).map(TB[t].from);
     const remoteHas = TBL.some(t => d[t].length);
@@ -53,7 +57,101 @@ async function pull() {
     setSync('Sincronizado');
   } catch (e) { setSync('Sin conexión'); }
 }
-window.addEventListener('online', () => { if (localStorage.getItem(DIRTY)) push(); });
+window.addEventListener('online', () => { if (!locked && localStorage.getItem(DIRTY)) push(); });
+
+/* ===== Contraseña (verificada por la base de datos) ===== */
+const rpc = (fn, args) => sb('rpc/' + fn, { method: 'POST', body: JSON.stringify(args || {}) });
+const claveOk = () => rpc('acceso_ok');
+const b64 = u8 => btoa(String.fromCharCode(...u8));
+async function derive(pw, salt) {
+  const k = await crypto.subtle.importKey('raw', new TextEncoder().encode(pw), 'PBKDF2', false, ['deriveBits']);
+  return b64(new Uint8Array(await crypto.subtle.deriveBits({ name: 'PBKDF2', salt, iterations: 150000, hash: 'SHA-256' }, k, 256)));
+}
+async function guardarVerif(pw) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  localStorage.setItem('kq_v', JSON.stringify({ s: b64(salt), h: await derive(pw, salt) }));
+}
+async function verifLocal(pw) {
+  try {
+    const v = JSON.parse(localStorage.getItem('kq_v')); if (!v) return null;
+    return (await derive(pw, Uint8Array.from(atob(v.s), c => c.charCodeAt(0)))) === v.h;
+  } catch (e) { return null; }
+}
+const msgErr = x => { try { return JSON.parse(x.message).message || x.message; } catch (e) { return /fetch|network/i.test(x.message) ? 'Sin conexión con el servidor.' : x.message; } };
+function resetIdle() { clearTimeout(idle); if (!locked) idle = setTimeout(() => lock('Sesión bloqueada por inactividad.'), 10 * 60 * 1000); }
+['pointerdown', 'keydown', 'touchstart'].forEach(ev => window.addEventListener(ev, resetIdle, { passive: true }));
+function lock(msg) {
+  locked = true; PW = ''; sessionStorage.removeItem('kq_pw'); clearTimeout(idle);
+  closeModal(); document.body.classList.add('locked'); $('#app').innerHTML = '';
+  showLock(typeof msg === 'string' ? msg : '');
+}
+function unlock() {
+  locked = false; sessionStorage.setItem('kq_pw', PW);
+  document.body.classList.remove('locked'); $('#lock').hidden = true; $('#lock').innerHTML = '';
+  resetIdle(); render(); pull();
+}
+async function showLock(msg) {
+  const el = $('#lock'); el.hidden = false; el.innerHTML = '<div class="lockbox"><h1>Kulqui+</h1><p class="m">Cargando…</p></div>';
+  let modo = 'entrar', offline = false;
+  try { modo = (await rpc('hay_acceso')) ? 'entrar' : 'crear'; }
+  catch (e) {
+    offline = true;
+    if (!localStorage.getItem('kq_v')) { el.innerHTML = '<div class="lockbox"><h1>Kulqui+</h1><p class="m">Necesitas conexión a internet para entrar por primera vez en este dispositivo.</p><button onclick="lock()">Reintentar</button></div>'; return; }
+  }
+  const crear = modo === 'crear';
+  el.innerHTML = `<form class="lockbox" onsubmit="enviarClave(event,'${modo}',${offline})">
+    <h1>Kulqui+</h1>
+    <p class="m">${crear ? 'Crea una contraseña para proteger tus datos (mínimo 8 caracteres, mejor 12 o más). Si la pierdes no se puede recuperar.' : offline ? 'Sin conexión: se verificará en este dispositivo.' : 'Ingresa tu contraseña'}</p>
+    <input type="password" name="pw" autocomplete="${crear ? 'new-password' : 'current-password'}" required placeholder="Contraseña" autofocus>
+    ${crear ? '<input type="password" name="pw2" autocomplete="new-password" required placeholder="Repite la contraseña">' : ''}
+    <div class="err" id="lockErr">${esc(msg || '')}</div>
+    <button>${crear ? 'Crear y entrar' : 'Entrar'}</button></form>`;
+}
+async function enviarClave(e, modo, offline) {
+  e.preventDefault(); const f = e.target, pw = fv(f, 'pw'), err = $('#lockErr'), btn = f.querySelector('button');
+  btn.disabled = true; err.textContent = '';
+  try {
+    if (modo === 'crear') {
+      if (pw.length < 8) throw new Error('Mínimo 8 caracteres.');
+      if (pw !== fv(f, 'pw2')) throw new Error('Las contraseñas no coinciden.');
+      await rpc('crear_acceso', { p: pw }); PW = pw; await guardarVerif(pw);
+    } else if (offline) {
+      if ((await verifLocal(pw)) !== true) { PW = ''; throw new Error('Contraseña incorrecta.'); }
+      PW = pw;
+    } else {
+      PW = pw;
+      if (!(await claveOk())) { PW = ''; throw new Error('Contraseña incorrecta.'); }
+      await guardarVerif(pw);
+    }
+    fallos = 0; unlock();
+  } catch (x) {
+    PW = ''; err.textContent = msgErr(x); btn.disabled = false;
+    if (err.textContent === 'Contraseña incorrecta.' && ++fallos >= 5) {
+      err.textContent = 'Demasiados intentos. Espera 30 segundos.'; btn.disabled = true; fallos = 0; setTimeout(() => { btn.disabled = false; err.textContent = ''; }, 30000);
+    }
+  }
+}
+async function boot() {
+  const p = sessionStorage.getItem('kq_pw');
+  if (p) {
+    PW = p;
+    try { if (await claveOk()) return unlock(); } catch (e) { if ((await verifLocal(p)) === true) return unlock(); }
+    PW = '';
+  }
+  lock();
+}
+const formClave = () => `<h2>Cambiar contraseña</h2><form onsubmit="cambiarClave(event)">
+  <label>Nueva contraseña (mínimo 8 caracteres)</label><input type="password" name="n1" required minlength="8" autocomplete="new-password">
+  <label>Repite la nueva contraseña</label><input type="password" name="n2" required autocomplete="new-password">
+  <div class="bar"><button>Cambiar</button><button type="button" class="sec" onclick="closeModal()">Cancelar</button></div></form>`;
+async function cambiarClave(e) {
+  e.preventDefault(); const f = e.target, n = fv(f, 'n1');
+  if (n !== fv(f, 'n2')) return alert('Las contraseñas no coinciden.');
+  try {
+    await rpc('cambiar_acceso', { nueva: n }); PW = n; sessionStorage.setItem('kq_pw', n); await guardarVerif(n);
+    closeModal(); alert('Contraseña cambiada. En tus otros dispositivos tendrás que ingresar la nueva.');
+  } catch (x) { alert(msgErr(x)); }
+}
 
 /* ===== Utilidades ===== */
 const $ = s => document.querySelector(s);
@@ -397,11 +495,12 @@ function vReportes(c) {
   ${rep.map(r => `<tr><td class="l">${esc(r.s.nombre)}</td><td>${money(r.ap)}</td><td>${(r.pct * 100).toFixed(1)}</td><td>${money(r.ut)}</td><td><b>${money(r.total)}</b></td><td>${money(r.deuda)}</td></tr>`).join('')}</table>
   <p class="m">Utilidad = intereses + mora cobrados, repartida según el aporte de cada socio.</p></div>
   <h2>Cartera en mora</h2><div class="card">${mor.length ? mor.map(({ p, i }) => `<div class="row"><a href="#/prestamo/${p.id}">${esc(socioNombre(p.socioId))}</a><div style="text-align:right">${money(i.saldoTot)}<div class="m neg">mora ${money(i.moraDebe)}</div></div></div>`).join('') : '<div class="empty">Sin mora</div>'}</div>
-  <div class="bar noprint"><button onclick="window.print()">Imprimir / PDF</button><button class="sec" onclick="exportCSV()">Exportar CSV</button><button class="sec" onclick="exportJSON()">Respaldo</button><label class="btn sec" style="border:1px solid var(--p);color:var(--p);background:transparent">Restaurar<input type="file" accept=".json" hidden onchange="importJSON(this)"></label></div>`;
+  <div class="bar noprint"><button onclick="window.print()">Imprimir / PDF</button><button class="sec" onclick="exportCSV()">Exportar CSV</button><button class="sec" onclick="exportJSON()">Respaldo</button><button class="sec" onclick="openModal(formClave())">Cambiar contraseña</button><label class="btn sec" style="border:1px solid var(--p);color:var(--p);background:transparent">Restaurar<input type="file" accept=".json" hidden onchange="importJSON(this)"></label></div>`;
 }
 
 /* ===== Router ===== */
 function render() {
+  if (locked) return;
   const [v, id] = (location.hash || '#/inicio').slice(2).split('/');
   const base = { prestamo: 'prestamos', reunion: 'reuniones' }[v] || v;
   document.querySelectorAll('nav a').forEach(a => a.classList.toggle('on', a.dataset.v === base));
@@ -415,6 +514,5 @@ function render() {
 }
 $('#cajaSel').addEventListener('change', e => { db.cajaActiva = e.target.value; save(); render(); });
 window.addEventListener('hashchange', render);
-render();
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
-pull();
+boot();
