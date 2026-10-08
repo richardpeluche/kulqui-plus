@@ -244,7 +244,7 @@ function olvideClave() {
 function entrarLocal(est) {
   modo = 'local'; LIC = est; locked = false; cargarDB('kq_local_v1'); marcaTiempo();
   document.body.classList.remove('locked'); $('#lock').hidden = true; $('#lock').innerHTML = '';
-  $('#bloq').hidden = false; setSync('Datos solo en este dispositivo'); pintarLic(); resetIdle(); render();
+  $('#bloq').hidden = false; setSync('Datos solo en este dispositivo'); pintarLic(); resetIdle(); render(); avisoRespaldo();
 }
 function pintarLic() {
   const a = $('#lic'); if (!a) return;
@@ -574,7 +574,27 @@ function exportCSV() {
   reparto(c.id).forEach(r => rows.push([r.s.nombre, r.ap, (r.pct * 100).toFixed(2), r.ut, r.total, r.deuda]));
   descargar(`reparto-${c.nombre}.csv`, 'text/csv', '\ufeff' + rows.map(r => r.map(x => `"${String(x).replace(/"/g, '""')}"`).join(',')).join('\n'));
 }
-const exportJSON = () => descargar(`respaldo-cajas-${today()}.json`, 'application/json', JSON.stringify(db));
+const DIAS_RESP = 7;
+const ultResp = () => +localStorage.getItem('kq_resp') || 0;
+const respVencido = () => modo === 'local' && Date.now() - ultResp() > DIAS_RESP * 864e5;
+function exportJSON() {
+  descargar(`respaldo-kulqui-${today()}.json`, 'application/json', JSON.stringify(db));
+  localStorage.setItem('kq_resp', String(Date.now())); closeModal(); render();
+}
+function respCard() {
+  if (modo !== 'local') return '';
+  const u = ultResp(), d = u ? Math.floor((Date.now() - u) / 864e5) : null;
+  const rest = `<label class="btn sec sm">Restaurar respaldo<input type="file" accept=".json" hidden onchange="importJSON(this)"></label>`;
+  if (!respVencido()) return `<div class="card"><div class="m">Último respaldo: ${d === 0 ? 'hoy' : `hace ${d} día${d === 1 ? '' : 's'}`}.</div><div class="bar"><button class="sec sm" onclick="exportJSON()">Crear respaldo</button>${rest}</div></div>`;
+  return `<div class="card aviso"><b>${u ? `Hace ${d} días que no creas un respaldo.` : 'Aún no has creado ningún respaldo.'}</b>
+    <div class="m">Tus datos están solo en este dispositivo. Si lo pierdes, lo cambias o borras el navegador, solo podrás recuperarlos con este archivo. Guárdalo en tu correo, Drive o WhatsApp. El respaldo es tu responsabilidad.</div>
+    <div class="bar"><button class="btn sm" onclick="exportJSON()">Crear respaldo</button>${rest}</div></div>`;
+}
+function avisoRespaldo() {
+  if (!respVencido()) return;
+  openModal(`<h2>Crea tu respaldo</h2><p class="m">Tus datos viven solo en este dispositivo. Si lo pierdes o cambias de teléfono, el archivo de respaldo es la única forma de recuperarlos. Guárdalo fuera del teléfono (correo, Drive o WhatsApp).</p>
+    <div class="bar"><button onclick="exportJSON()">Crear respaldo ahora</button><button class="sec" onclick="closeModal()">Más tarde</button></div>`);
+}
 function importJSON(inp) {
   const f = inp.files[0]; if (!f) return;
   const rd = new FileReader();
@@ -583,7 +603,7 @@ function importJSON(inp) {
       const d = JSON.parse(rd.result);
       if (!Array.isArray(d.cajas) || !Array.isArray(d.socios)) throw 0;
       if (!confirm('Esto reemplazará todos los datos actuales. ¿Continuar?')) return;
-      db = Object.assign(seed(), d); save(); render();
+      db = Object.assign(seed(), d); save(); localStorage.setItem('kq_resp', String(Date.now())); render();
     } catch (e) { alert('Archivo de respaldo no válido.'); }
   };
   rd.readAsText(f);
@@ -597,7 +617,7 @@ function vInicio(c) {
   });
   prox.sort((a, b) => a.i.proxima.fecha.localeCompare(b.i.proxima.fecha));
   const lim = addMonths(today(), 0).slice(0, 8) + '99';
-  return licCard() + `<div class="grid">
+  return licCard() + respCard() + `<div class="grid">
     <div class="stat"><small>Fondo total</small><b>${money(st.fondo)}</b></div>
     <div class="stat"><small>Efectivo en caja</small><b>${money(st.efectivo)}</b></div>
     <div class="stat"><small>Prestado vigente</small><b>${money(st.prestado)}</b></div>
