@@ -3,15 +3,17 @@
 const KEY = 'cajas_v1', DIRTY = 'cajas_v1_dirty';
 const SB = 'https://shcbozuzwzkzphkmjfwo.supabase.co/rest/v1/';
 const SBK = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNoY2JvenV6d3prenBoa21qZndvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTE0Nzc4ODQsImV4cCI6MjEwNzA1Mzg4NH0.AyQ4J-EBDohVaF1NzOb90K0okk-zhiMUOsosxInotQc';
-const TBL = ['cajas', 'socios', 'prestamos', 'reuniones'];
+const TBL = ['cajas', 'socios', 'prestamos', 'reuniones', 'ingresos'];
 const TB = {
   cajas: { to: c => ({ id: c.id, nombre: c.nombre, tasa: c.tasa, mora: c.mora, aporte: c.aporte }), from: r => ({ id: r.id, nombre: r.nombre, tasa: +r.tasa, mora: +r.mora, aporte: +r.aporte }) },
   socios: { to: s => ({ id: s.id, caja_id: s.cajaId, nombre: s.nombre, cedula: s.cedula || '', telefono: s.telefono || '', rol: s.rol || 'Socio' }), from: r => ({ id: r.id, cajaId: r.caja_id, nombre: r.nombre, cedula: r.cedula, telefono: r.telefono, rol: r.rol }) },
   prestamos: { to: p => ({ id: p.id, caja_id: p.cajaId, socio_id: p.socioId, monto: p.monto, plazo: p.plazo, tasa: p.tasa, mora: p.mora, metodo: p.metodo, gracia: p.gracia || 0, fecha: p.fecha, pagos: p.pagos }), from: r => ({ id: r.id, cajaId: r.caja_id, socioId: r.socio_id, monto: +r.monto, plazo: r.plazo, tasa: +r.tasa, mora: +r.mora, metodo: r.metodo, gracia: r.gracia, fecha: r.fecha, pagos: r.pagos || [] }) },
-  reuniones: { to: r => ({ id: r.id, caja_id: r.cajaId, fecha: r.fecha, lugar: r.lugar || '', asistentes: r.asistentes, aportes: r.aportes, acta: r.acta || '' }), from: r => ({ id: r.id, cajaId: r.caja_id, fecha: r.fecha, lugar: r.lugar, asistentes: r.asistentes || [], aportes: r.aportes || {}, acta: r.acta }) }
+  reuniones: { to: r => ({ id: r.id, caja_id: r.cajaId, fecha: r.fecha, lugar: r.lugar || '', asistentes: r.asistentes, aportes: r.aportes, acta: r.acta || '' }), from: r => ({ id: r.id, cajaId: r.caja_id, fecha: r.fecha, lugar: r.lugar, asistentes: r.asistentes || [], aportes: r.aportes || {}, acta: r.acta }) },
+  ingresos: { to: i => ({ id: i.id, caja_id: i.cajaId, fecha: i.fecha, monto: i.monto, concepto: i.concepto || '' }), from: r => ({ id: r.id, cajaId: r.caja_id, fecha: r.fecha, monto: +r.monto, concepto: r.concepto }) }
 };
-const seed = () => ({ cajas: [], socios: [], prestamos: [], reuniones: [], cajaActiva: null });
+const seed = () => ({ cajas: [], socios: [], prestamos: [], reuniones: [], ingresos: [], cajaActiva: null });
 let db = (() => { try { return JSON.parse(localStorage.getItem(KEY)) || seed(); } catch (e) { return seed(); } })();
+db.ingresos = db.ingresos || [];
 const setSync = t => { const e = document.querySelector('#sync'); if (e) e.textContent = t; };
 async function sb(path, opt = {}) {
   const r = await fetch(SB + path, { ...opt, headers: { apikey: SBK, Authorization: 'Bearer ' + SBK, 'Content-Type': 'application/json', ...(opt.headers || {}) } });
@@ -114,9 +116,10 @@ function stats(cajaId) {
     desembolsado += p.monto; cobrado += p.pagos.reduce((s, x) => s + x.monto, 0);
     interes += i.intPag; mora += i.moraCobrada; saldoCap += i.saldoCap;
   });
+  const ingresos = db.ingresos.filter(i => i.cajaId === cajaId).reduce((s, i) => s + i.monto, 0);
   const utilidad = r2(interes + mora);
-  const efectivo = r2(aportes - desembolsado + cobrado + mora);
-  return { aportes: r2(aportes), desembolsado, utilidad, efectivo, prestado: r2(saldoCap), fondo: r2(efectivo + saldoCap), interes: r2(interes), mora: r2(mora) };
+  const efectivo = r2(aportes + ingresos - desembolsado + cobrado + mora);
+  return { aportes: r2(aportes), ingresos: r2(ingresos), desembolsado, utilidad, efectivo, prestado: r2(saldoCap), fondo: r2(efectivo + saldoCap), interes: r2(interes), mora: r2(mora) };
 }
 const aporteSocio = (cajaId, sid) => db.reuniones.filter(r => r.cajaId === cajaId).reduce((s, r) => s + (r.aportes[sid] || 0), 0);
 const cajaActual = () => db.cajas.find(c => c.id === db.cajaActiva) || db.cajas[0];
@@ -139,7 +142,29 @@ function formCaja(c) {
     <div><label>Mora mensual por defecto (%)</label><input name="mora" inputmode="decimal" value="${c.mora}"></div></div>
     <label>Aporte sugerido por reunión ($)</label><input name="aporte" inputmode="decimal" value="${c.aporte}">
     <div class="bar"><button>Guardar</button><button type="button" class="sec" onclick="closeModal()">Cancelar</button></div>
-  </form>`;
+  </form>` + (c.id ? formIngresos(c.id) : '');
+}
+function formIngresos(cid) {
+  const l = db.ingresos.filter(i => i.cajaId === cid).sort((a, b) => b.fecha.localeCompare(a.fecha));
+  return `<h2>Ingresos al fondo</h2><p class="m">Dinero que entró a la caja (donaciones, rifas, multas, etc.). Se suma al efectivo y al fondo total. Total: <b>${money(stats(cid).ingresos)}</b></p>
+  <form onsubmit="agregarIngreso(event,'${cid}')">
+    <div class="two"><div><label>Monto ($)</label><input name="monto" inputmode="decimal" required></div>
+    <div><label>Fecha</label><input type="date" name="fecha" value="${today()}" required></div></div>
+    <label>Concepto</label><input name="concepto" placeholder="Ej: rifa, donación, multa">
+    <div class="bar"><button>Agregar al fondo</button></div>
+  </form>
+  ${l.map(i => `<div class="row"><div>${fdate(i.fecha)}<div class="m">${esc(i.concepto)}</div></div><b>${money(i.monto)}</b><button class="del sm" onclick="borrarIngreso('${i.id}')">×</button></div>`).join('')}`;
+}
+function agregarIngreso(e, cid) {
+  e.preventDefault(); const f = e.target, monto = num(fv(f, 'monto'));
+  if (monto <= 0) return alert('Ingresa un monto mayor a 0.');
+  db.ingresos.push({ id: uid(), cajaId: cid, fecha: fv(f, 'fecha'), monto: r2(monto), concepto: fv(f, 'concepto').trim() });
+  save(); openModal(formCaja(db.cajas.find(c => c.id === cid))); render();
+}
+function borrarIngreso(id) {
+  if (!confirm('¿Eliminar este ingreso? Se descontará del fondo.')) return;
+  const i = db.ingresos.find(x => x.id === id); db.ingresos = db.ingresos.filter(x => x.id !== id);
+  save(); openModal(formCaja(db.cajas.find(c => c.id === i.cajaId))); render();
 }
 function guardarCaja(e, id) {
   e.preventDefault(); const f = e.target;
@@ -151,7 +176,7 @@ function guardarCaja(e, id) {
 function borrarCaja(id) {
   if (!confirm('Se borrará la caja con todos sus socios, préstamos y reuniones. ¿Continuar?')) return;
   db.cajas = db.cajas.filter(c => c.id !== id);
-  ['socios', 'prestamos', 'reuniones'].forEach(k => db[k] = db[k].filter(x => x.cajaId !== id));
+  ['socios', 'prestamos', 'reuniones', 'ingresos'].forEach(k => db[k] = db[k].filter(x => x.cajaId !== id));
   db.cajaActiva = db.cajas[0]?.id || null; save(); closeModal(); render();
 }
 
@@ -366,7 +391,7 @@ function vReportes(c) {
   const st = stats(c.id), rep = reparto(c.id);
   const mor = db.prestamos.filter(p => p.cajaId === c.id).map(p => ({ p, i: info(p) })).filter(x => x.i.estado === 'En mora');
   return `<div class="card"><h2 style="margin-top:0">Balance · ${esc(c.nombre)}</h2><div class="m">Al ${fdate(today())}</div>
-  <table><tr><td class="l">Aportes de socios</td><td>${money(st.aportes)}</td></tr><tr><td class="l">Total desembolsado</td><td>- ${money(st.desembolsado)}</td></tr><tr><td class="l">Capital recuperado</td><td>${money(st.desembolsado - st.prestado)}</td></tr><tr><td class="l">Intereses cobrados</td><td>${money(st.interes)}</td></tr><tr><td class="l">Mora cobrada</td><td>${money(st.mora)}</td></tr>
+  <table><tr><td class="l">Aportes de socios</td><td>${money(st.aportes)}</td></tr><tr><td class="l">Ingresos al fondo</td><td>${money(st.ingresos)}</td></tr><tr><td class="l">Total desembolsado</td><td>- ${money(st.desembolsado)}</td></tr><tr><td class="l">Capital recuperado</td><td>${money(st.desembolsado - st.prestado)}</td></tr><tr><td class="l">Intereses cobrados</td><td>${money(st.interes)}</td></tr><tr><td class="l">Mora cobrada</td><td>${money(st.mora)}</td></tr>
   <tr><th class="l">Efectivo en caja</th><th>${money(st.efectivo)}</th></tr><tr><td class="l">Cartera vigente (capital)</td><td>${money(st.prestado)}</td></tr><tr><th class="l">Fondo total</th><th>${money(st.fondo)}</th></tr></table></div>
   <h2>Reparto de utilidades</h2><div class="card scroll"><table><tr><th class="l">Socio</th><th>Aportes</th><th>%</th><th>Utilidad</th><th>A recibir</th><th>Debe</th></tr>
   ${rep.map(r => `<tr><td class="l">${esc(r.s.nombre)}</td><td>${money(r.ap)}</td><td>${(r.pct * 100).toFixed(1)}</td><td>${money(r.ut)}</td><td><b>${money(r.total)}</b></td><td>${money(r.deuda)}</td></tr>`).join('')}</table>
