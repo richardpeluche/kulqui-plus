@@ -667,7 +667,7 @@ function vInicio(c) {
     <div class="stat"><small>Prestado vigente</small><b>${money(st.prestado)}</b></div>
     <div class="stat"><small>Utilidad generada</small><b class="pos">${money(st.utilidad)}</b></div></div>
   <h2>Próximos cobros</h2><div class="card">${prox.length ? prox.slice(0, 12).map(({ p, i }) => `<div class="row"><a href="#/prestamo/${p.id}"><b>${esc(socioNombre(p.socioId))}</b><div class="m">Cuota ${i.proxima.n} · ${fdate(i.proxima.fecha)}</div></a><div style="text-align:right">${money(i.proxima.pend)}<div>${badge(i.estado === 'En mora' ? 'En mora' : i.proxima.estado)}</div></div></div>`).join('') : '<div class="empty">Sin cobros pendientes</div>'}</div>
-  <div class="bar"><button class="sec sm" onclick="openModal(formCaja(cajaActual()))">Editar caja</button><button class="sec sm" onclick="openModal(formCaja())">+ Otra caja</button><button class="del sm" onclick="borrarCaja('${c.id}')">Eliminar caja</button></div>`;
+  <div class="bar"><button class="sm" onclick="cargaMasiva()">Carga masiva (Excel)</button><button class="sec sm" onclick="openModal(formCaja(cajaActual()))">Editar caja</button><button class="sec sm" onclick="openModal(formCaja())">+ Otra caja</button><button class="del sm" onclick="borrarCaja('${c.id}')">Eliminar caja</button></div>`;
 }
 function vSocios(c) {
   const l = db.socios.filter(s => s.cajaId === c.id);
@@ -737,6 +737,17 @@ function render() {
 }
 $('#cajaSel').addEventListener('change', e => { db.cajaActiva = e.target.value; save(); render(); });
 window.addEventListener('hashchange', render);
+/* ===== Carga masiva (módulo que se descarga solo al usarlo) ===== */
+const cargarScript = src => new Promise((ok, no) => { const s = document.createElement('script'); s.src = src; s.onload = ok; s.onerror = () => no(new Error(src)); document.head.appendChild(s); });
+async function cargaMasiva() {
+  if (!cajaActual()) return alert('Primero crea una caja.');
+  try {
+    if (typeof XLSX === 'undefined') await cargarScript('xlsx.core.min.js');
+    if (typeof KQI === 'undefined') await cargarScript('import.js');
+    KQI.abrir();
+  } catch (e) { alert('No se pudo cargar el módulo de importación. Revisa tu conexión a internet.'); }
+}
+
 /* ===== Actualización disponible e instalación ===== */
 function avisoActualizar(reg) {
   if ($('#upd')) return;
