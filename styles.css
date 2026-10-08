@@ -57,3 +57,7 @@ header{flex-wrap:wrap}
 .aviso{border-color:var(--warn);background:#fffbeb;color:#422006}
 @media(prefers-color-scheme:dark){.aviso{background:#2a2108;color:#fde68a}}
 .lockbox .btn{text-align:center}
+
+.upd{position:fixed;left:12px;right:12px;bottom:70px;z-index:60;background:var(--p2);color:#fff;border-radius:12px;padding:10px 14px;display:flex;justify-content:space-between;align-items:center;gap:10px;box-shadow:0 4px 16px #0005;font-weight:600}
+.upd button{background:#fff;color:var(--p2)}
+body.locked .upd{bottom:16px}

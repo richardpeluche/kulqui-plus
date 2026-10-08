@@ -186,6 +186,7 @@ function showLicencia(msg) {
     <div class="err" id="lockErr">${esc(msg || '')}</div>
     <button>Activar</button>
     <a class="lnk" href="${waVenta('Hola, quiero una clave para usar Kulqui+.')}" target="_blank" rel="noopener">Solicitar clave por WhatsApp</a>
+    ${instalada() ? '' : '<a class="lnk" onclick="instalarApp()">Instalar app</a>'}
     <a class="lnk" onclick="showLock()">Acceso propietario</a></form>`;
 }
 async function enviarLicencia(e) {
@@ -239,7 +240,7 @@ async function enviarClaveUsuario(e, crear) {
 }
 function olvideClave() {
   if (!confirm('Para crear una contraseña nueva se borrarán los datos guardados en este dispositivo (puedes restaurarlos después con una copia JSON de Reportes). ¿Continuar?')) return;
-  localStorage.removeItem('kq_uv'); localStorage.removeItem('kq_local_v1'); puerta(LIC);
+  localStorage.removeItem('kq_uv'); localStorage.removeItem('kq_local_v1'); imgVaciar(); puerta(LIC);
 }
 function entrarLocal(est) {
   modo = 'local'; LIC = est; locked = false; cargarDB('kq_local_v1'); marcaTiempo();
@@ -489,6 +490,41 @@ function guardarPrestamo(e) {
   const p = { id: uid(), cajaId: c.id, socioId: fv(f, 'socio'), monto, plazo, tasa: num(fv(f, 'tasa')), mora: num(fv(f, 'mora')), metodo: fv(f, 'metodo'), gracia: parseInt(fv(f, 'gracia')) || 0, fecha: fv(f, 'fecha'), pagos: [] };
   db.prestamos.push(p); save(); closeModal(); location.hash = '#/prestamo/' + p.id;
 }
+/* ===== Comprobantes de pago: imágenes guardadas solo en este dispositivo (IndexedDB) ===== */
+const idb = () => new Promise((ok, no) => {
+  const r = indexedDB.open('kulqui_img', 1);
+  r.onupgradeneeded = () => r.result.createObjectStore('img');
+  r.onsuccess = () => ok(r.result); r.onerror = () => no(r.error);
+});
+const idbOp = (modo, fn) => idb().then(d => new Promise((ok, no) => {
+  const t = d.transaction('img', modo), q = fn(t.objectStore('img'));
+  t.oncomplete = () => ok(q && q.result); t.onerror = () => no(t.error);
+}));
+const imgGuardar = (id, blob) => idbOp('readwrite', s => s.put(blob, id));
+const imgLeer = id => idbOp('readonly', s => s.get(id));
+const imgBorrar = id => idbOp('readwrite', s => s.delete(id)).catch(() => { });
+const imgVaciar = () => idbOp('readwrite', s => s.clear()).catch(() => { });
+function reducirImagen(file, max = 1280) {
+  return new Promise((ok, no) => {
+    const url = URL.createObjectURL(file), im = new Image();
+    im.onload = () => {
+      const k = Math.min(1, max / Math.max(im.width, im.height)), c = document.createElement('canvas');
+      c.width = Math.round(im.width * k); c.height = Math.round(im.height * k);
+      c.getContext('2d').drawImage(im, 0, 0, c.width, c.height); URL.revokeObjectURL(url);
+      c.toBlob(b => b ? ok(b) : no(new Error('No se pudo procesar la imagen.')), 'image/jpeg', 0.72);
+    };
+    im.onerror = () => { URL.revokeObjectURL(url); no(new Error('Archivo de imagen no válido.')); };
+    im.src = url;
+  });
+}
+async function verComprobante(id) {
+  try {
+    const b = await imgLeer(id);
+    if (!b) return alert('Este comprobante no está en este dispositivo.');
+    const u = URL.createObjectURL(b);
+    openModal(`<h2>Comprobante</h2><img src="${u}" style="max-width:100%;border-radius:8px"><div class="bar"><a class="btn sec" href="${u}" download="comprobante-${id}.jpg">Descargar</a><button onclick="closeModal()">Cerrar</button></div>`);
+  } catch (e) { alert('No se pudo abrir el comprobante.'); }
+}
 function formPago(pid) {
   const p = db.prestamos.find(x => x.id === pid), i = info(p), pr = i.proxima;
   return `<h2>Registrar pago</h2><p class="m">${esc(socioNombre(p.socioId))} · Saldo: ${money(i.saldoTot)} · Mora adeudada: ${money(i.moraDebe)}</p>
@@ -497,20 +533,28 @@ function formPago(pid) {
     <label>Cobro de mora ($)</label><input name="mora" inputmode="decimal" value="${i.moraDebe}">
     <label>Fecha</label><input type="date" name="fecha" value="${today()}" required>
     <label>Nota</label><input name="nota">
+    <label>Comprobante (foto, opcional)</label><input type="file" name="img" accept="image/*">
+    <div class="m">La imagen se guarda solo en este teléfono; no entra en el respaldo.</div>
     <div class="bar"><button>Guardar pago</button><button type="button" class="sec" onclick="closeModal()">Cancelar</button></div>
   </form>`;
 }
-function guardarPago(e, pid) {
+async function guardarPago(e, pid) {
   e.preventDefault(); const f = e.target, p = db.prestamos.find(x => x.id === pid), i = info(p);
   const monto = num(fv(f, 'monto')), mora = num(fv(f, 'mora'));
   if (monto < 0 || mora < 0 || monto + mora <= 0) return alert('Ingresa un monto válido.');
   if (monto > i.saldoTot + 0.001) return alert('El pago supera el saldo pendiente.');
-  p.pagos.push({ id: uid(), fecha: fv(f, 'fecha'), monto: r2(monto), mora: r2(mora), nota: fv(f, 'nota') });
+  const id = uid(), file = f.elements.img && f.elements.img.files && f.elements.img.files[0];
+  let img = false;
+  if (file) {
+    try { await imgGuardar(id, await reducirImagen(file)); img = true; }
+    catch (x) { if (!confirm('No se pudo guardar la imagen del comprobante. ¿Guardar el pago sin imagen?')) return; }
+  }
+  p.pagos.push({ id, fecha: fv(f, 'fecha'), monto: r2(monto), mora: r2(mora), nota: fv(f, 'nota'), ...(img ? { img: true } : {}) });
   save(); closeModal(); render();
 }
 function borrarPago(pid, id) {
   if (!confirm('¿Eliminar este pago?')) return;
-  const p = db.prestamos.find(x => x.id === pid); p.pagos = p.pagos.filter(x => x.id !== id); save(); render();
+  const p = db.prestamos.find(x => x.id === pid); p.pagos = p.pagos.filter(x => x.id !== id); imgBorrar(id); save(); render();
 }
 function borrarPrestamo(id) {
   if (!confirm('¿Eliminar préstamo y sus pagos?')) return;
@@ -647,7 +691,7 @@ function vPrestamo(id) {
     <div class="bar">${i.estado !== 'Cancelado' ? `<button onclick="openModal(formPago('${p.id}'))">Registrar pago</button>` : ''}${wa ? `<a class="btn sec" style="background:transparent;color:var(--p);border:1px solid var(--p)" href="${wa}" target="_blank" rel="noopener">Recordar por WhatsApp</a>` : ''}<button class="sec" onclick="window.print()">Imprimir</button><button class="del" onclick="borrarPrestamo('${p.id}')">Eliminar</button></div></div>
   <h2>Tabla de amortización</h2><div class="card scroll"><table><tr><th>#</th><th>Fecha</th><th>Capital</th><th>Interés</th><th>Cuota</th><th>Pagado</th><th>Estado</th></tr>
   ${i.sch.map(c => `<tr><td>${c.n}</td><td class="l">${fdate(c.fecha)}</td><td>${money(c.capital)}</td><td>${money(c.interes)}</td><td>${money(c.total)}</td><td>${money(c.pagado)}</td><td>${badge(c.estado)}</td></tr>`).join('')}</table></div>
-  <h2>Pagos</h2><div class="card">${p.pagos.length ? p.pagos.map(x => `<div class="row"><div>${fdate(x.fecha)}<div class="m">${esc(x.nota)}</div></div><div style="text-align:right">${money(x.monto)}${x.mora ? `<div class="m">+ mora ${money(x.mora)}</div>` : ''}</div><button class="del sm" onclick="borrarPago('${p.id}','${x.id}')">×</button></div>`).join('') : '<div class="empty">Sin pagos</div>'}</div>`;
+  <h2>Pagos</h2><div class="card">${p.pagos.length ? p.pagos.map(x => `<div class="row"><div>${fdate(x.fecha)}<div class="m">${esc(x.nota)}</div>${x.img ? `<a class="lnk" onclick="verComprobante('${x.id}')">Ver comprobante</a>` : ''}</div><div style="text-align:right">${money(x.monto)}${x.mora ? `<div class="m">+ mora ${money(x.mora)}</div>` : ''}</div><button class="del sm" onclick="borrarPago('${p.id}','${x.id}')">×</button></div>`).join('') : '<div class="empty">Sin pagos</div>'}</div>`;
 }
 function vReuniones(c) {
   const l = db.reuniones.filter(r => r.cajaId === c.id).sort((a, b) => b.fecha.localeCompare(a.fecha));
@@ -693,5 +737,39 @@ function render() {
 }
 $('#cajaSel').addEventListener('change', e => { db.cajaActiva = e.target.value; save(); render(); });
 window.addEventListener('hashchange', render);
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+/* ===== Actualización disponible e instalación ===== */
+function avisoActualizar(reg) {
+  if ($('#upd')) return;
+  const d = document.createElement('div'); d.id = 'upd'; d.className = 'upd';
+  d.innerHTML = '<span>Actualización disponible</span><button class="sm">Actualizar</button>';
+  d.querySelector('button').onclick = () => { d.querySelector('button').disabled = true; reg.waiting ? reg.waiting.postMessage('skip') : location.reload(); };
+  document.body.appendChild(d);
+}
+if ('serviceWorker' in navigator) {
+  const hay = !!navigator.serviceWorker.controller; let recargando = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => { if (hay && !recargando) { recargando = true; location.reload(); } });
+  navigator.serviceWorker.register('sw.js').then(reg => {
+    if (reg.waiting && hay) avisoActualizar(reg);
+    reg.addEventListener('updatefound', () => {
+      const n = reg.installing; if (!n) return;
+      n.addEventListener('statechange', () => { if (n.state === 'installed' && navigator.serviceWorker.controller) avisoActualizar(reg); });
+    });
+    const buscar = () => reg.update().catch(() => { });
+    setInterval(buscar, 30 * 60 * 1000);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) buscar(); });
+  }).catch(() => { });
+}
+let instEvt = null;
+const instalada = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+function pintarInstalar() { const b = $('#inst'); if (b) b.hidden = instalada(); }
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); instEvt = e; pintarInstalar(); });
+window.addEventListener('appinstalled', () => { instEvt = null; const b = $('#inst'); if (b) b.hidden = true; });
+async function instalarApp() {
+  if (instEvt) { instEvt.prompt(); try { await instEvt.userChoice; } catch (e) { } instEvt = null; return pintarInstalar(); }
+  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  openModal(`<h2>Instalar Kulqui+</h2><p class="m">${ios
+    ? 'En Safari toca el botón Compartir y elige "Añadir a pantalla de inicio".'
+    : 'En Chrome abre el menú ⋮ (arriba a la derecha) y elige "Instalar aplicación" o "Añadir a pantalla de inicio". Si no aparece, recarga la página y espera unos segundos.'}</p><button onclick="closeModal()">Entendido</button>`);
+}
+pintarInstalar();
 boot();
