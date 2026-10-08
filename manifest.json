@@ -1,15 +1,19 @@
 {
+  "id": "/kulqui-plus/",
   "name": "Kulqui+",
   "short_name": "Kulqui+",
   "description": "Gestión de cajas comunales: socios, préstamos, reuniones y reportes",
-  "start_url": "./index.html#/inicio",
+  "start_url": "./index.html?source=pwa",
   "scope": "./",
   "display": "standalone",
+  "orientation": "portrait",
   "background_color": "#0f766e",
   "theme_color": "#0f766e",
   "lang": "es",
   "icons": [
-    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
-    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
   ]
 }
