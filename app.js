@@ -1,6 +1,6 @@
 'use strict';
 /* ===== Almacenamiento: copia local + sincronización con Supabase ===== */
-const KEY = 'cajas_v1', DIRTY = 'cajas_v1_dirty';
+let KEY = 'cajas_v1'; const DIRTY = 'cajas_v1_dirty';
 const SB = 'https://shcbozuzwzkzphkmjfwo.supabase.co/rest/v1/';
 const SBK = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNoY2JvenV6d3prenBoa21qZndvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTE0Nzc4ODQsImV4cCI6MjEwNzA1Mzg4NH0.AyQ4J-EBDohVaF1NzOb90K0okk-zhiMUOsosxInotQc';
 const TBL = ['cajas', 'socios', 'prestamos', 'reuniones', 'ingresos'];
@@ -12,8 +12,12 @@ const TB = {
   ingresos: { to: i => ({ id: i.id, caja_id: i.cajaId, fecha: i.fecha, monto: i.monto, concepto: i.concepto || '' }), from: r => ({ id: r.id, cajaId: r.caja_id, fecha: r.fecha, monto: +r.monto, concepto: r.concepto }) }
 };
 const seed = () => ({ cajas: [], socios: [], prestamos: [], reuniones: [], ingresos: [], cajaActiva: null });
-let db = (() => { try { return JSON.parse(localStorage.getItem(KEY)) || seed(); } catch (e) { return seed(); } })();
-db.ingresos = db.ingresos || [];
+let db = seed(), modo = null, LIC = null;
+function cargarDB(k) {
+  KEY = k;
+  try { db = JSON.parse(localStorage.getItem(k)) || seed(); } catch (e) { db = seed(); }
+  db.ingresos = db.ingresos || [];
+}
 let PW = '', locked = true, idle, fallos = 0;
 const enc = s => btoa(String.fromCharCode(...new TextEncoder().encode(s)));
 const setSync = t => { const e = document.querySelector('#sync'); if (e) e.textContent = t; };
@@ -41,8 +45,9 @@ async function push() {
   if (again) { again = false; push(); }
 }
 function save() {
-  localStorage.setItem(KEY, JSON.stringify(db)); localStorage.setItem(DIRTY, '1');
-  clearTimeout(timer); timer = setTimeout(push, 600);
+  localStorage.setItem(KEY, JSON.stringify(db));
+  if (modo !== 'nube') return;
+  localStorage.setItem(DIRTY, '1'); clearTimeout(timer); timer = setTimeout(push, 600);
 }
 async function pull() {
   if (localStorage.getItem(DIRTY)) return push();
@@ -57,7 +62,7 @@ async function pull() {
     setSync('Sincronizado');
   } catch (e) { setSync('Sin conexión'); }
 }
-window.addEventListener('online', () => { if (!locked && localStorage.getItem(DIRTY)) push(); });
+window.addEventListener('online', () => { if (!locked && modo === 'nube' && localStorage.getItem(DIRTY)) push(); });
 
 /* ===== Contraseña (verificada por la base de datos) ===== */
 const rpc = (fn, args) => sb('rpc/' + fn, { method: 'POST', body: JSON.stringify(args || {}) });
@@ -78,17 +83,18 @@ async function verifLocal(pw) {
   } catch (e) { return null; }
 }
 const msgErr = x => { try { return JSON.parse(x.message).message || x.message; } catch (e) { return /fetch|network/i.test(x.message) ? 'Sin conexión con el servidor.' : x.message; } };
-function resetIdle() { clearTimeout(idle); if (!locked) idle = setTimeout(() => lock('Sesión bloqueada por inactividad.'), 10 * 60 * 1000); }
+function resetIdle() { clearTimeout(idle); if (!locked && modo === 'nube') idle = setTimeout(() => lock('Sesión bloqueada por inactividad.'), 10 * 60 * 1000); }
 ['pointerdown', 'keydown', 'touchstart'].forEach(ev => window.addEventListener(ev, resetIdle, { passive: true }));
 function lock(msg) {
-  locked = true; PW = ''; sessionStorage.removeItem('kq_pw'); clearTimeout(idle);
-  closeModal(); document.body.classList.add('locked'); $('#app').innerHTML = '';
-  showLock(typeof msg === 'string' ? msg : '');
+  locked = true; PW = ''; modo = null; LIC = null; db = seed(); sessionStorage.removeItem('kq_pw'); clearTimeout(idle);
+  closeModal(); document.body.classList.add('locked'); $('#app').innerHTML = ''; setSync(''); pintarLic();
+  entrada(typeof msg === 'string' ? msg : '');
 }
 function unlock() {
-  locked = false; sessionStorage.setItem('kq_pw', PW);
+  locked = false; modo = 'nube'; LIC = null; localStorage.setItem('kq_owner', '1'); cargarDB('cajas_v1');
+  sessionStorage.setItem('kq_pw', PW);
   document.body.classList.remove('locked'); $('#lock').hidden = true; $('#lock').innerHTML = '';
-  resetIdle(); render(); pull();
+  $('#bloq').hidden = false; pintarLic(); resetIdle(); render(); pull();
 }
 async function showLock(msg) {
   const el = $('#lock'); el.hidden = false; el.innerHTML = '<div class="lockbox"><h1>Kulqui+</h1><p class="m">Cargando…</p></div>';
@@ -105,7 +111,8 @@ async function showLock(msg) {
     <input type="password" name="pw" autocomplete="${crear ? 'new-password' : 'current-password'}" required placeholder="Contraseña" autofocus>
     ${crear ? '<input type="password" name="pw2" autocomplete="new-password" required placeholder="Repite la contraseña">' : ''}
     <div class="err" id="lockErr">${esc(msg || '')}</div>
-    <button>${crear ? 'Crear y entrar' : 'Entrar'}</button></form>`;
+    <button>${crear ? 'Crear y entrar' : 'Entrar'}</button>
+    <a class="lnk" onclick="showLicencia()">Tengo una clave de licencia</a></form>`;
 }
 async function enviarClave(e, modo, offline) {
   e.preventDefault(); const f = e.target, pw = fv(f, 'pw'), err = $('#lockErr'), btn = f.querySelector('button');
@@ -138,7 +145,125 @@ async function boot() {
     try { if (await claveOk()) return unlock(); } catch (e) { if ((await verifLocal(p)) === true) return unlock(); }
     PW = '';
   }
-  lock();
+  entrada();
+}
+
+/* ===== Licencias (clave free de 5 días / premium anual) ===== */
+const WA = '593988928651', SITIO = 'https://richardpeluche.github.io/kulqui-plus/';
+const waVenta = txt => `https://wa.me/${WA}?text=${encodeURIComponent(txt)}`;
+const PREMIUM_MSG = 'Hola, quiero adquirir Kulqui+ premium (licencia anual).';
+const devId = () => { let d = localStorage.getItem('kq_dev'); if (!d) { d = crypto.randomUUID ? crypto.randomUUID() : uid() + uid(); localStorage.setItem('kq_dev', d); } return d; };
+const diasRest = v => Math.max(0, Math.ceil((Date.parse(v) - Date.now()) / 864e5));
+const tmax = () => +localStorage.getItem('kq_t') || 0;
+const marcaTiempo = (t = Date.now()) => localStorage.setItem('kq_t', String(Math.max(tmax(), t)));
+function guardarLic(est) {
+  LIC = est; localStorage.setItem('kq_lic', JSON.stringify({ codigo: est.codigo, tipo: est.tipo, vence: est.vence }));
+  if (est.ahora) marcaTiempo(Date.parse(est.ahora));
+}
+async function entrada(msg) {
+  closeModal();
+  if (localStorage.getItem('kq_owner')) return showLock(msg);
+  let lic = null; try { lic = JSON.parse(localStorage.getItem('kq_lic')); } catch (e) { }
+  if (!lic) return showLicencia(msg);
+  let est;
+  try {
+    est = await rpc('estado_licencia', { p_codigo: lic.codigo, p_dispositivo: devId(), p_activar: false });
+    guardarLic(est);
+  } catch (e) {
+    if (e instanceof TypeError) {
+      if (Date.now() < tmax() - 5 * 6e4) return showLicencia('Revisa la fecha y hora de tu dispositivo.');
+      est = { ...lic, vigente: Date.now() < Date.parse(lic.vence) };
+    } else { localStorage.removeItem('kq_lic'); return showLicencia(msgErr(e)); }
+  }
+  est.vigente ? entrarLocal(est) : pantallaVencida(est);
+}
+function showLicencia(msg) {
+  const el = $('#lock'); el.hidden = false;
+  el.innerHTML = `<form class="lockbox" onsubmit="enviarLicencia(event)">
+    <h1>Kulqui+</h1>
+    <p class="m">Ingresa tu clave de licencia para usar la app.</p>
+    <input name="clave" required placeholder="KQ-XXXX-XXXX-XXXX" autocomplete="off" autocapitalize="characters" autofocus>
+    <div class="err" id="lockErr">${esc(msg || '')}</div>
+    <button>Activar</button>
+    <a class="lnk" href="${waVenta('Hola, quiero una clave para usar Kulqui+.')}" target="_blank" rel="noopener">Solicitar clave por WhatsApp</a>
+    <a class="lnk" onclick="showLock()">Acceso propietario</a></form>`;
+}
+async function enviarLicencia(e) {
+  e.preventDefault(); const f = e.target, err = $('#lockErr'), btn = f.querySelector('button');
+  btn.disabled = true; err.textContent = '';
+  try {
+    const est = await rpc('estado_licencia', { p_codigo: fv(f, 'clave'), p_dispositivo: devId(), p_activar: true });
+    guardarLic(est); est.vigente ? entrarLocal(est) : pantallaVencida(est);
+  } catch (x) { err.textContent = msgErr(x); btn.disabled = false; }
+}
+function pantallaVencida(est) {
+  const el = $('#lock'); el.hidden = false;
+  el.innerHTML = `<form class="lockbox" onsubmit="enviarLicencia(event)">
+    <h1>Kulqui+</h1>
+    <p><b>${est.tipo === 'free' ? 'Tu prueba gratuita de 5 días terminó.' : 'Tu licencia premium venció.'}</b></p>
+    <p class="m">Adquiere premium para seguir usando Kulqui+. Tus datos siguen guardados en este dispositivo y volverán a estar disponibles al activar.</p>
+    <a class="btn" href="${waVenta(PREMIUM_MSG)}" target="_blank" rel="noopener">Adquirir premium por WhatsApp</a>
+    <p class="m">¿Ya tienes tu clave premium?</p>
+    <input name="clave" required placeholder="KQ-XXXX-XXXX-XXXX" autocomplete="off" autocapitalize="characters">
+    <div class="err" id="lockErr"></div><button>Activar</button></form>`;
+}
+function entrarLocal(est) {
+  modo = 'local'; LIC = est; locked = false; cargarDB('kq_local_v1'); marcaTiempo();
+  document.body.classList.remove('locked'); $('#lock').hidden = true; $('#lock').innerHTML = '';
+  $('#bloq').hidden = true; setSync('Datos solo en este dispositivo'); pintarLic(); render();
+}
+function pintarLic() {
+  const a = $('#lic'); if (!a) return;
+  if (modo !== 'local' || !LIC) { a.hidden = true; return; }
+  const d = diasRest(LIC.vence), s = d === 1 ? '' : 's';
+  if (LIC.tipo === 'free') { a.textContent = `Prueba: ${d} día${s}`; a.href = waVenta(PREMIUM_MSG); a.hidden = false; }
+  else if (d <= 30) { a.textContent = `Premium vence en ${d} día${s}`; a.href = waVenta('Hola, quiero renovar mi licencia de Kulqui+.'); a.hidden = false; }
+  else a.hidden = true;
+}
+function licCard() {
+  if (modo !== 'local' || !LIC || LIC.tipo !== 'free') return '';
+  const d = diasRest(LIC.vence);
+  return `<div class="card aviso"><b>Prueba gratuita: ${d === 0 ? 'último día' : `quedan ${d} día${d === 1 ? '' : 's'}`}.</b>
+    <div class="m">Adquiere premium para seguir usando Kulqui+ sin interrupciones. Tus datos no se pierden.</div>
+    <div class="bar"><a class="btn sm" href="${waVenta(PREMIUM_MSG)}" target="_blank" rel="noopener">Adquirir premium</a></div></div>`;
+}
+setInterval(() => {
+  if (locked) return;
+  marcaTiempo(); pintarLic();
+  if (modo === 'local' && LIC && Date.now() >= Date.parse(LIC.vence)) lock();
+}, 60000);
+
+/* ===== Panel de licencias (solo propietario) ===== */
+const msgClave = (c, tipo) => `Tu clave de Kulqui+ (${tipo === 'free' ? 'prueba de 5 días' : 'premium anual'}): ${c}\n\n1. Abre ${SITIO}\n2. Escribe la clave y toca Activar.`;
+async function abrirLicencias() {
+  openModal('<h2>Licencias</h2><p class="m">Cargando…</p>');
+  try {
+    const l = await rpc('listar_licencias');
+    openModal(`<h2>Licencias</h2>
+    <form onsubmit="nuevaLicencia(event)"><div class="two">
+      <div><label>Tipo</label><select name="tipo"><option value="premium">Premium (365 días, 1 dispositivo)</option><option value="free">Free (5 días, varios dispositivos)</option></select></div>
+      <div><label>Nota</label><input name="nota" placeholder="Nombre del cliente"></div></div>
+      <div class="bar"><button>Generar clave</button><button type="button" class="sec" onclick="closeModal()">Cerrar</button></div></form>
+    ${l.map(x => `<div class="row"><div><b>${esc(x.codigo)}</b> <span class="badge ${x.tipo === 'premium' ? 'ok' : ''}">${x.tipo}</span>${x.activa ? '' : ' <span class="badge bad">desactivada</span>'}
+      <div class="m">${esc(x.nota)} · ${x.dispositivos} dispositivo(s)${x.primera ? ' · desde ' + fdate(String(x.primera).slice(0, 10)) : ''}</div></div>
+      <div class="bar"><button class="sec sm" onclick="copiarClave('${x.codigo}','${x.tipo}')">Copiar</button>${x.tipo === 'premium' ? `<button class="sec sm" onclick="licAccion('liberar_licencia','${x.codigo}')">Liberar</button>` : ''}<button class="sec sm" onclick="licAccion('cambiar_estado_licencia','${x.codigo}',${!x.activa})">${x.activa ? 'Desactivar' : 'Activar'}</button></div></div>`).join('')}`);
+  } catch (x) { openModal(`<h2>Licencias</h2><p class="err">${esc(msgErr(x))}</p><button onclick="closeModal()">Cerrar</button>`); }
+}
+async function copiarClave(c, tipo) {
+  try { await navigator.clipboard.writeText(msgClave(c, tipo)); alert('Mensaje copiado. Pégalo en WhatsApp.'); }
+  catch (e) { prompt('Copia este mensaje:', msgClave(c, tipo)); }
+}
+async function nuevaLicencia(e) {
+  e.preventDefault(); const f = e.target, tipo = fv(f, 'tipo');
+  try {
+    const c = await rpc('crear_licencia', { p_tipo: tipo, p_nota: fv(f, 'nota').trim() });
+    await abrirLicencias(); await copiarClave(c, tipo);
+  } catch (x) { alert(msgErr(x)); }
+}
+async function licAccion(fn, codigo, activa) {
+  if (fn === 'liberar_licencia' && !confirm('Se libera el dispositivo actual para que la clave se use en otro equipo. ¿Continuar?')) return;
+  try { await rpc(fn, fn === 'cambiar_estado_licencia' ? { p_codigo: codigo, p_activa: activa } : { p_codigo: codigo }); abrirLicencias(); }
+  catch (x) { alert(msgErr(x)); }
 }
 const formClave = () => `<h2>Cambiar contraseña</h2><form onsubmit="cambiarClave(event)">
   <label>Nueva contraseña (mínimo 8 caracteres)</label><input type="password" name="n1" required minlength="8" autocomplete="new-password">
@@ -438,7 +563,7 @@ function vInicio(c) {
   });
   prox.sort((a, b) => a.i.proxima.fecha.localeCompare(b.i.proxima.fecha));
   const lim = addMonths(today(), 0).slice(0, 8) + '99';
-  return `<div class="grid">
+  return licCard() + `<div class="grid">
     <div class="stat"><small>Fondo total</small><b>${money(st.fondo)}</b></div>
     <div class="stat"><small>Efectivo en caja</small><b>${money(st.efectivo)}</b></div>
     <div class="stat"><small>Prestado vigente</small><b>${money(st.prestado)}</b></div>
@@ -495,7 +620,7 @@ function vReportes(c) {
   ${rep.map(r => `<tr><td class="l">${esc(r.s.nombre)}</td><td>${money(r.ap)}</td><td>${(r.pct * 100).toFixed(1)}</td><td>${money(r.ut)}</td><td><b>${money(r.total)}</b></td><td>${money(r.deuda)}</td></tr>`).join('')}</table>
   <p class="m">Utilidad = intereses + mora cobrados, repartida según el aporte de cada socio.</p></div>
   <h2>Cartera en mora</h2><div class="card">${mor.length ? mor.map(({ p, i }) => `<div class="row"><a href="#/prestamo/${p.id}">${esc(socioNombre(p.socioId))}</a><div style="text-align:right">${money(i.saldoTot)}<div class="m neg">mora ${money(i.moraDebe)}</div></div></div>`).join('') : '<div class="empty">Sin mora</div>'}</div>
-  <div class="bar noprint"><button onclick="window.print()">Imprimir / PDF</button><button class="sec" onclick="exportCSV()">Exportar CSV</button><button class="sec" onclick="exportJSON()">Respaldo</button><button class="sec" onclick="openModal(formClave())">Cambiar contraseña</button><label class="btn sec" style="border:1px solid var(--p);color:var(--p);background:transparent">Restaurar<input type="file" accept=".json" hidden onchange="importJSON(this)"></label></div>`;
+  <div class="bar noprint"><button onclick="window.print()">Imprimir / PDF</button><button class="sec" onclick="exportCSV()">Exportar CSV</button><button class="sec" onclick="exportJSON()">Respaldo</button>${modo === 'nube' ? '<button class="sec" onclick="openModal(formClave())">Cambiar contraseña</button><button class="sec" onclick="abrirLicencias()">Licencias</button>' : ''}<label class="btn sec" style="border:1px solid var(--p);color:var(--p);background:transparent">Restaurar<input type="file" accept=".json" hidden onchange="importJSON(this)"></label></div>`;
 }
 
 /* ===== Router ===== */

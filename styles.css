@@ -50,3 +50,10 @@ th:first-child,td:first-child,td.l,th.l{text-align:left}
 .err{color:var(--bad);min-height:18px;font-size:13px}
 body.locked header,body.locked main,body.locked nav{display:none}
 @media print{.lock{display:none!important}}
+header{flex-wrap:wrap}
+.licpill{background:#fff;color:var(--p2);border-radius:99px;padding:3px 10px;font-size:12px;font-weight:700;text-decoration:none}
+.licpill[hidden],button[hidden]{display:none}
+.lnk{color:var(--p);font-size:13px;cursor:pointer;text-decoration:underline}
+.aviso{border-color:var(--warn);background:#fffbeb;color:#422006}
+@media(prefers-color-scheme:dark){.aviso{background:#2a2108;color:#fde68a}}
+.lockbox .btn{text-align:center}
