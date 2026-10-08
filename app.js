@@ -72,18 +72,18 @@ async function derive(pw, salt) {
   const k = await crypto.subtle.importKey('raw', new TextEncoder().encode(pw), 'PBKDF2', false, ['deriveBits']);
   return b64(new Uint8Array(await crypto.subtle.deriveBits({ name: 'PBKDF2', salt, iterations: 150000, hash: 'SHA-256' }, k, 256)));
 }
-async function guardarVerif(pw) {
+async function guardarVerif(pw, k = 'kq_v') {
   const salt = crypto.getRandomValues(new Uint8Array(16));
-  localStorage.setItem('kq_v', JSON.stringify({ s: b64(salt), h: await derive(pw, salt) }));
+  localStorage.setItem(k, JSON.stringify({ s: b64(salt), h: await derive(pw, salt) }));
 }
-async function verifLocal(pw) {
+async function verifLocal(pw, k = 'kq_v') {
   try {
-    const v = JSON.parse(localStorage.getItem('kq_v')); if (!v) return null;
+    const v = JSON.parse(localStorage.getItem(k)); if (!v) return null;
     return (await derive(pw, Uint8Array.from(atob(v.s), c => c.charCodeAt(0)))) === v.h;
   } catch (e) { return null; }
 }
 const msgErr = x => { try { return JSON.parse(x.message).message || x.message; } catch (e) { return /fetch|network/i.test(x.message) ? 'Sin conexión con el servidor.' : x.message; } };
-function resetIdle() { clearTimeout(idle); if (!locked && modo === 'nube') idle = setTimeout(() => lock('Sesión bloqueada por inactividad.'), 10 * 60 * 1000); }
+function resetIdle() { clearTimeout(idle); if (!locked && modo) idle = setTimeout(() => lock('Sesión bloqueada por inactividad.'), 10 * 60 * 1000); }
 ['pointerdown', 'keydown', 'touchstart'].forEach(ev => window.addEventListener(ev, resetIdle, { passive: true }));
 function lock(msg) {
   locked = true; PW = ''; modo = null; LIC = null; db = seed(); sessionStorage.removeItem('kq_pw'); clearTimeout(idle);
@@ -175,7 +175,7 @@ async function entrada(msg) {
       est = { ...lic, vigente: Date.now() < Date.parse(lic.vence) };
     } else { localStorage.removeItem('kq_lic'); return showLicencia(msgErr(e)); }
   }
-  est.vigente ? entrarLocal(est) : pantallaVencida(est);
+  est.vigente ? puerta(est) : pantallaVencida(est);
 }
 function showLicencia(msg) {
   const el = $('#lock'); el.hidden = false;
@@ -193,7 +193,7 @@ async function enviarLicencia(e) {
   btn.disabled = true; err.textContent = '';
   try {
     const est = await rpc('estado_licencia', { p_codigo: fv(f, 'clave'), p_dispositivo: devId(), p_activar: true });
-    guardarLic(est); est.vigente ? entrarLocal(est) : pantallaVencida(est);
+    guardarLic(est); est.vigente ? puerta(est) : pantallaVencida(est);
   } catch (x) { err.textContent = msgErr(x); btn.disabled = false; }
 }
 function pantallaVencida(est) {
@@ -207,10 +207,44 @@ function pantallaVencida(est) {
     <input name="clave" required placeholder="KQ-XXXX-XXXX-XXXX" autocomplete="off" autocapitalize="characters">
     <div class="err" id="lockErr"></div><button>Activar</button></form>`;
 }
+/* Contraseña personal de cada usuario con licencia (se guarda solo en su dispositivo) */
+function puerta(est, msg) {
+  const el = $('#lock'); el.hidden = false; LIC = est;
+  const crear = !localStorage.getItem('kq_uv');
+  el.innerHTML = `<form class="lockbox" onsubmit="enviarClaveUsuario(event,${crear})">
+    <h1>Kulqui+</h1>
+    <p class="m">${crear ? 'Crea tu contraseña personal para proteger tus datos (mínimo 8 caracteres). Se guarda solo en este dispositivo y si la pierdes no se puede recuperar.' : 'Ingresa tu contraseña'}</p>
+    <input type="password" name="pw" autocomplete="${crear ? 'new-password' : 'current-password'}" required placeholder="Contraseña" autofocus>
+    ${crear ? '<input type="password" name="pw2" autocomplete="new-password" required placeholder="Repite la contraseña">' : ''}
+    <div class="err" id="lockErr">${esc(msg || '')}</div>
+    <button>${crear ? 'Crear y entrar' : 'Entrar'}</button>
+    ${crear ? '' : '<a class="lnk" onclick="olvideClave()">Olvidé mi contraseña</a>'}</form>`;
+}
+async function enviarClaveUsuario(e, crear) {
+  e.preventDefault(); const f = e.target, pw = fv(f, 'pw'), err = $('#lockErr'), btn = f.querySelector('button');
+  btn.disabled = true; err.textContent = '';
+  try {
+    if (crear) {
+      if (pw.length < 8) throw new Error('Mínimo 8 caracteres.');
+      if (pw !== fv(f, 'pw2')) throw new Error('Las contraseñas no coinciden.');
+      await guardarVerif(pw, 'kq_uv');
+    } else if ((await verifLocal(pw, 'kq_uv')) !== true) throw new Error('Contraseña incorrecta.');
+    fallos = 0; entrarLocal(LIC);
+  } catch (x) {
+    err.textContent = x.message; btn.disabled = false;
+    if (x.message === 'Contraseña incorrecta.' && ++fallos >= 5) {
+      err.textContent = 'Demasiados intentos. Espera 30 segundos.'; btn.disabled = true; fallos = 0; setTimeout(() => { btn.disabled = false; err.textContent = ''; }, 30000);
+    }
+  }
+}
+function olvideClave() {
+  if (!confirm('Para crear una contraseña nueva se borrarán los datos guardados en este dispositivo (puedes restaurarlos después con una copia JSON de Reportes). ¿Continuar?')) return;
+  localStorage.removeItem('kq_uv'); localStorage.removeItem('kq_local_v1'); puerta(LIC);
+}
 function entrarLocal(est) {
   modo = 'local'; LIC = est; locked = false; cargarDB('kq_local_v1'); marcaTiempo();
   document.body.classList.remove('locked'); $('#lock').hidden = true; $('#lock').innerHTML = '';
-  $('#bloq').hidden = true; setSync('Datos solo en este dispositivo'); pintarLic(); render();
+  $('#bloq').hidden = false; setSync('Datos solo en este dispositivo'); pintarLic(); resetIdle(); render();
 }
 function pintarLic() {
   const a = $('#lic'); if (!a) return;
