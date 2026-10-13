@@ -83,7 +83,7 @@ async function verifLocal(pw, k = 'kq_v') {
   } catch (e) { return null; }
 }
 const msgErr = x => { try { return JSON.parse(x.message).message || x.message; } catch (e) { return /fetch|network/i.test(x.message) ? 'Sin conexión con el servidor.' : x.message; } };
-function resetIdle() { clearTimeout(idle); if (!locked && modo) idle = setTimeout(() => lock('Sesión bloqueada por inactividad.'), 10 * 60 * 1000); }
+function resetIdle() { clearTimeout(idle); if (!locked && (modo === 'nube' || (modo === 'local' && localStorage.getItem('kq_uv')))) idle = setTimeout(() => lock('Sesión bloqueada por inactividad.'), 10 * 60 * 1000); }
 ['pointerdown', 'keydown', 'touchstart'].forEach(ev => window.addEventListener(ev, resetIdle, { passive: true }));
 function lock(msg) {
   locked = true; PW = ''; modo = null; LIC = null; db = seed(); sessionStorage.removeItem('kq_pw'); clearTimeout(idle);
@@ -160,33 +160,43 @@ function guardarLic(est) {
   LIC = est; localStorage.setItem('kq_lic', JSON.stringify({ codigo: est.codigo, tipo: est.tipo, vence: est.vence }));
   if (est.ahora) marcaTiempo(Date.parse(est.ahora));
 }
+const TRIAL_DIAS = 5;
+function prueba() {
+  let t = +localStorage.getItem('kq_trial');
+  if (!t) { t = Date.now(); localStorage.setItem('kq_trial', String(t)); marcaTiempo(t); }
+  const fin = t + TRIAL_DIAS * 864e5;
+  return { codigo: '', tipo: 'free', prueba: true, vence: new Date(fin).toISOString(), vigente: Date.now() < fin };
+}
+function pantallaFecha() {
+  const el = $('#lock'); el.hidden = false;
+  el.innerHTML = '<div class="lockbox"><h1>Kulqui+</h1><p class="m">Revisa la fecha y hora de tu dispositivo y vuelve a intentar.</p><button onclick="lock()">Reintentar</button></div>';
+}
+const pasarPuerta = est => localStorage.getItem('kq_uv') ? puerta(est) : entrarLocal(est);
 async function entrada(msg) {
   closeModal();
   if (localStorage.getItem('kq_owner')) return showLock(msg);
+  if (Date.now() < tmax() - 5 * 6e4) return pantallaFecha();
   let lic = null; try { lic = JSON.parse(localStorage.getItem('kq_lic')); } catch (e) { }
-  if (!lic) return showLicencia(msg);
-  let est;
-  try {
-    est = await rpc('estado_licencia', { p_codigo: lic.codigo, p_dispositivo: devId(), p_activar: false });
-    guardarLic(est);
-  } catch (e) {
-    if (e instanceof TypeError) {
-      if (Date.now() < tmax() - 5 * 6e4) return showLicencia('Revisa la fecha y hora de tu dispositivo.');
-      est = { ...lic, vigente: Date.now() < Date.parse(lic.vence) };
-    } else { localStorage.removeItem('kq_lic'); return showLicencia(msgErr(e)); }
+  let est = null;
+  if (lic) {
+    try { est = await rpc('estado_licencia', { p_codigo: lic.codigo, p_dispositivo: devId(), p_activar: false }); guardarLic(est); }
+    catch (e) {
+      if (e instanceof TypeError) est = { ...lic, vigente: Date.now() < Date.parse(lic.vence) };
+      else { localStorage.removeItem('kq_lic'); msg = msgErr(e); }
+    }
   }
-  est.vigente ? puerta(est) : pantallaVencida(est);
+  if (!est) est = prueba();
+  est.vigente ? pasarPuerta(est) : pantallaVencida(est, msg);
 }
 function showLicencia(msg) {
   const el = $('#lock'); el.hidden = false;
   el.innerHTML = `<form class="lockbox" onsubmit="enviarLicencia(event)">
     <h1>Kulqui+</h1>
-    <p class="m">Ingresa tu clave de licencia para usar la app.</p>
+    <p class="m">Ingresa tu clave de licencia.</p>
     <input name="clave" required placeholder="KQ-XXXX-XXXX-XXXX" autocomplete="off" autocapitalize="characters" autofocus>
     <div class="err" id="lockErr">${esc(msg || '')}</div>
     <button>Activar</button>
     <a class="lnk" href="${waVenta('Hola, quiero una clave para usar Kulqui+.')}" target="_blank" rel="noopener">Solicitar clave por WhatsApp</a>
-    ${instalada() ? '' : '<a class="lnk" onclick="instalarApp()">Instalar app</a>'}
     <a class="lnk" onclick="showLock()">Acceso propietario</a></form>`;
 }
 async function enviarLicencia(e) {
@@ -194,10 +204,10 @@ async function enviarLicencia(e) {
   btn.disabled = true; err.textContent = '';
   try {
     const est = await rpc('estado_licencia', { p_codigo: fv(f, 'clave'), p_dispositivo: devId(), p_activar: true });
-    guardarLic(est); est.vigente ? puerta(est) : pantallaVencida(est);
+    guardarLic(est); est.vigente ? pasarPuerta(est) : pantallaVencida(est);
   } catch (x) { err.textContent = msgErr(x); btn.disabled = false; }
 }
-function pantallaVencida(est) {
+function pantallaVencida(est, msg) {
   const el = $('#lock'); el.hidden = false;
   el.innerHTML = `<form class="lockbox" onsubmit="enviarLicencia(event)">
     <h1>Kulqui+</h1>
@@ -206,7 +216,8 @@ function pantallaVencida(est) {
     <a class="btn" href="${waVenta(PREMIUM_MSG)}" target="_blank" rel="noopener">Adquirir premium por WhatsApp</a>
     <p class="m">¿Ya tienes tu clave premium?</p>
     <input name="clave" required placeholder="KQ-XXXX-XXXX-XXXX" autocomplete="off" autocapitalize="characters">
-    <div class="err" id="lockErr"></div><button>Activar</button></form>`;
+    <div class="err" id="lockErr">${esc(msg || '')}</div><button>Activar</button>
+    <a class="lnk" onclick="showLock()">Acceso propietario</a></form>`;
 }
 /* Contraseña personal de cada usuario con licencia (se guarda solo en su dispositivo) */
 function puerta(est, msg) {
@@ -245,7 +256,7 @@ function olvideClave() {
 function entrarLocal(est) {
   modo = 'local'; LIC = est; locked = false; cargarDB('kq_local_v1'); marcaTiempo();
   document.body.classList.remove('locked'); $('#lock').hidden = true; $('#lock').innerHTML = '';
-  $('#bloq').hidden = false; setSync('Datos solo en este dispositivo'); pintarLic(); resetIdle(); render(); avisoRespaldo();
+  $('#bloq').hidden = !localStorage.getItem('kq_uv'); setSync('Datos solo en este dispositivo'); pintarLic(); resetIdle(); render(); avisoRespaldo();
 }
 function pintarLic() {
   const a = $('#lic'); if (!a) return;
@@ -267,6 +278,60 @@ setInterval(() => {
   marcaTiempo(); pintarLic();
   if (modo === 'local' && LIC && Date.now() >= Date.parse(LIC.vence)) lock();
 }, 60000);
+
+/* ===== Cuenta: licencia y contraseña de la app (en Reportes) ===== */
+function licTxt() {
+  if (!LIC) return '';
+  const d = diasRest(LIC.vence), s = d === 1 ? '' : 's';
+  if (LIC.tipo === 'free') return LIC.prueba ? `Prueba gratuita: quedan ${d} día${s}.` : `Clave de prueba: quedan ${d} día${s}.`;
+  return d > 36000 ? 'Premium de por vida.' : `Premium activo hasta el ${fdate(String(LIC.vence).slice(0, 10))}.`;
+}
+function cuentaCard() {
+  if (modo !== 'local') return '';
+  const tiene = !!localStorage.getItem('kq_uv');
+  return `<h2>Licencia y seguridad</h2><div class="card noprint">
+    <b>Licencia</b><div class="m">${esc(licTxt())}</div>
+    <form onsubmit="activarLic(event)" style="margin-top:8px"><div class="two"><input name="clave" required placeholder="KQ-XXXX-XXXX-XXXX" autocomplete="off" autocapitalize="characters"><button class="sm">Activar clave</button></div></form>
+    <div class="bar"><a class="btn sec sm" href="${waVenta(PREMIUM_MSG)}" target="_blank" rel="noopener">Adquirir premium</a></div>
+    <hr style="border:0;border-top:1px solid var(--b);margin:12px 0">
+    <b>Contraseña de la app</b><div class="m">${tiene ? 'La app pide tu contraseña al abrirse.' : 'Opcional. Si la creas, la app la pedirá cada vez que se abra.'}</div>
+    <div class="bar"><button class="sec sm" onclick="openModal(formClaveApp())">${tiene ? 'Cambiar contraseña' : 'Crear contraseña'}</button>${tiene ? '<button class="del sm" onclick="openModal(formQuitarClave())">Quitar contraseña</button>' : ''}</div>
+    <hr style="border:0;border-top:1px solid var(--b);margin:12px 0">
+    <a class="lnk" onclick="showLock()">Acceso propietario</a></div>`;
+}
+async function activarLic(e) {
+  e.preventDefault(); const f = e.target;
+  try {
+    const est = await rpc('estado_licencia', { p_codigo: fv(f, 'clave'), p_dispositivo: devId(), p_activar: true });
+    guardarLic(est); if (!est.vigente) return alert('Esa clave está vencida.');
+    LIC = est; pintarLic(); render(); alert('Licencia activada.');
+  } catch (x) { alert(msgErr(x)); }
+}
+function formClaveApp() {
+  const tiene = !!localStorage.getItem('kq_uv');
+  return `<h2>${tiene ? 'Cambiar contraseña' : 'Crear contraseña'}</h2><form onsubmit="guardarClaveApp(event,${tiene})">
+    ${tiene ? '<label>Contraseña actual</label><input type="password" name="act" required autocomplete="current-password">' : ''}
+    <label>Nueva contraseña (mínimo 8 caracteres)</label><input type="password" name="n1" required minlength="8" autocomplete="new-password">
+    <label>Repite la nueva contraseña</label><input type="password" name="n2" required autocomplete="new-password">
+    <div class="m">Se guarda solo en este dispositivo. Si la olvidas no se puede recuperar.</div>
+    <div class="bar"><button>Guardar</button><button type="button" class="sec" onclick="closeModal()">Cancelar</button></div></form>`;
+}
+async function guardarClaveApp(e, tiene) {
+  e.preventDefault(); const f = e.target, n = fv(f, 'n1');
+  if (tiene && (await verifLocal(fv(f, 'act'), 'kq_uv')) !== true) return alert('La contraseña actual no es correcta.');
+  if (n.length < 8) return alert('Mínimo 8 caracteres.');
+  if (n !== fv(f, 'n2')) return alert('Las contraseñas no coinciden.');
+  await guardarVerif(n, 'kq_uv'); closeModal(); $('#bloq').hidden = false; resetIdle(); render(); alert('Contraseña guardada.');
+}
+const formQuitarClave = () => `<h2>Quitar contraseña</h2><form onsubmit="quitarClaveApp(event)">
+  <label>Contraseña actual</label><input type="password" name="act" required autocomplete="current-password">
+  <div class="m">La app volverá a abrirse sin pedir contraseña.</div>
+  <div class="bar"><button class="del">Quitar</button><button type="button" class="sec" onclick="closeModal()">Cancelar</button></div></form>`;
+async function quitarClaveApp(e) {
+  e.preventDefault();
+  if ((await verifLocal(fv(e.target, 'act'), 'kq_uv')) !== true) return alert('La contraseña actual no es correcta.');
+  localStorage.removeItem('kq_uv'); clearTimeout(idle); $('#bloq').hidden = true; closeModal(); render();
+}
 
 /* ===== Panel de licencias (solo propietario) ===== */
 const msgClave = (c, tipo) => `Tu clave de Kulqui+ (${tipo === 'free' ? 'prueba de 5 días' : tipo === 'vida' ? 'premium de por vida' : 'premium anual'}): ${c}\n\n1. Abre ${SITIO}\n2. Escribe la clave y toca Activar.`;
@@ -620,7 +685,7 @@ function exportCSV() {
 }
 const DIAS_RESP = 7;
 const ultResp = () => +localStorage.getItem('kq_resp') || 0;
-const respVencido = () => modo === 'local' && Date.now() - ultResp() > DIAS_RESP * 864e5;
+const respVencido = () => modo === 'local' && db.cajas.length > 0 && Date.now() - ultResp() > DIAS_RESP * 864e5;
 function exportJSON() {
   descargar(`respaldo-kulqui-${today()}.json`, 'application/json', JSON.stringify(db));
   localStorage.setItem('kq_resp', String(Date.now())); closeModal(); render();
@@ -708,7 +773,7 @@ function vReunion(id) {
   <div class="bar noprint"><button onclick="openModal(formReunion('${r.id}'))">Editar</button><button class="sec" onclick="window.print()">Imprimir acta</button><button class="del" onclick="borrarReunion('${r.id}')">Eliminar</button></div></div>`;
 }
 function vReportes(c) {
-  if (!c) return `<div class="card"><button onclick="exportJSON()">Respaldo</button> <label class="btn sec">Restaurar<input type="file" accept=".json" hidden onchange="importJSON(this)"></label></div>`;
+  if (!c) return `<div class="card"><button onclick="exportJSON()">Respaldo</button> <label class="btn sec">Restaurar<input type="file" accept=".json" hidden onchange="importJSON(this)"></label></div>` + cuentaCard();
   const st = stats(c.id), rep = reparto(c.id);
   const mor = db.prestamos.filter(p => p.cajaId === c.id).map(p => ({ p, i: info(p) })).filter(x => x.i.estado === 'En mora');
   return `<div class="card"><h2 style="margin-top:0">Balance · ${esc(c.nombre)}</h2><div class="m">Al ${fdate(today())}</div>
@@ -718,7 +783,7 @@ function vReportes(c) {
   ${rep.map(r => `<tr><td class="l">${esc(r.s.nombre)}</td><td>${money(r.ap)}</td><td>${(r.pct * 100).toFixed(1)}</td><td>${money(r.ut)}</td><td><b>${money(r.total)}</b></td><td>${money(r.deuda)}</td></tr>`).join('')}</table>
   <p class="m">Utilidad = intereses + mora cobrados, repartida según el aporte de cada socio.</p></div>
   <h2>Cartera en mora</h2><div class="card">${mor.length ? mor.map(({ p, i }) => `<div class="row"><a href="#/prestamo/${p.id}">${esc(socioNombre(p.socioId))}</a><div style="text-align:right">${money(i.saldoTot)}<div class="m neg">mora ${money(i.moraDebe)}</div></div></div>`).join('') : '<div class="empty">Sin mora</div>'}</div>
-  <div class="bar noprint"><button onclick="window.print()">Imprimir / PDF</button><button class="sec" onclick="exportCSV()">Exportar CSV</button><button class="sec" onclick="exportJSON()">Respaldo</button>${modo === 'nube' ? '<button class="sec" onclick="openModal(formClave())">Cambiar contraseña</button><button class="sec" onclick="abrirLicencias()">Licencias</button>' : ''}<label class="btn sec" style="border:1px solid var(--p);color:var(--p);background:transparent">Restaurar<input type="file" accept=".json" hidden onchange="importJSON(this)"></label></div>`;
+  <div class="bar noprint"><button onclick="window.print()">Imprimir / PDF</button><button class="sec" onclick="exportCSV()">Exportar CSV</button><button class="sec" onclick="exportJSON()">Respaldo</button>${modo === 'nube' ? '<button class="sec" onclick="openModal(formClave())">Cambiar contraseña</button><button class="sec" onclick="abrirLicencias()">Licencias</button>' : ''}<label class="btn sec" style="border:1px solid var(--p);color:var(--p);background:transparent">Restaurar<input type="file" accept=".json" hidden onchange="importJSON(this)"></label></div>` + cuentaCard();
 }
 
 /* ===== Router ===== */

@@ -11,6 +11,7 @@
 <link rel="stylesheet" href="styles.css">
 </head>
 <body class="locked">
+<div class="top">
 <header>
   <h1>Kulqui+ <small id="sync" style="font-size:11px;font-weight:400;opacity:.8"></small></h1>
   <a id="lic" class="licpill" target="_blank" rel="noopener" hidden></a>
@@ -18,14 +19,16 @@
   <button id="inst" class="sm sec" style="color:#fff;border-color:#fff" onclick="instalarApp()" hidden>Instalar app</button>
   <button id="bloq" class="sm sec" style="color:#fff;border-color:#fff" onclick="lock()" hidden>Bloquear</button>
 </header>
-<main id="app"></main>
 <nav>
-  <a href="#/inicio" data-v="inicio">Inicio</a>
-  <a href="#/socios" data-v="socios">Socios</a>
-  <a href="#/prestamos" data-v="prestamos">Préstamos</a>
-  <a href="#/reuniones" data-v="reuniones">Reuniones</a>
-  <a href="#/reportes" data-v="reportes">Reportes</a>
+  <a href="#/inicio" data-v="inicio"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/></svg><span>Inicio</span></a>
+  <a href="#/socios" data-v="socios"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6"/><circle cx="17.5" cy="9" r="2.5"/><path d="M17 14.2c2.7.2 4.5 2 4.5 5.3"/></svg><span>Socios</span></a>
+  <a href="#/prestamos" data-v="prestamos"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="6" width="19" height="12" rx="2"/><circle cx="12" cy="12" r="3"/><path d="M6 9.5v.01M18 14.5v.01"/></svg><span>Préstamos</span></a>
+  <a href="#/reuniones" data-v="reuniones"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15.5" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/></svg><span>Reuniones</span></a>
+  <a href="#/reportes" data-v="reportes"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20V4M4 20h16"/><rect x="7.5" y="11" width="3" height="6"/><rect x="13" y="7" width="3" height="10"/></svg><span>Reportes</span></a>
 </nav>
+</div>
+<main id="app"></main>
+
 <div id="modal" class="modal" hidden></div>
 <div id="lock" class="lock"></div>
 <script src="app.js"></script>
