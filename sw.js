@@ -1,4 +1,4 @@
-const V = 'kulqui-v13';
+const V = 'kulqui-v14';
 const FILES = ['./', 'index.html', 'app.js', 'styles.css', 'manifest.json', 'icon.svg', 'icon-192.png', 'icon-512.png', 'import.js', 'xlsx.core.min.js'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(V).then(c => c.addAll(FILES))); });
 self.addEventListener('message', e => { if (e.data === 'skip') self.skipWaiting(); });
@@ -8,7 +8,11 @@ self.addEventListener('activate', e => {
 });
 self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
+  let u; try { u = new URL(e.request.url); } catch (x) { return; }
+  if (u.origin !== self.location.origin) return;
+  if (!u.pathname.startsWith(new URL('./', self.location.href).pathname)) return;
   e.respondWith(fetch(e.request).then(r => {
-    const copy = r.clone(); caches.open(V).then(c => c.put(e.request, copy)); return r;
+    if (r && r.ok && r.type === 'basic') { const copy = r.clone(); caches.open(V).then(c => c.put(e.request, copy)); }
+    return r;
   }).catch(() => caches.match(e.request).then(m => m || caches.match('index.html'))));
 });

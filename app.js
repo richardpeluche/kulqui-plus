@@ -704,17 +704,78 @@ function avisoRespaldo() {
   openModal(`<h2>Crea tu respaldo</h2><p class="m">Tus datos viven solo en este dispositivo. Si lo pierdes o cambias de teléfono, el archivo de respaldo es la única forma de recuperarlos. Guárdalo fuera del teléfono (correo, Drive o WhatsApp).</p>
     <div class="bar"><button onclick="exportJSON()">Crear respaldo ahora</button><button class="sec" onclick="closeModal()">Más tarde</button></div>`);
 }
+/* ===== Validación del archivo de respaldo ===== */
+const RX_ID = /^[A-Za-z0-9_-]{1,40}$/;
+const RX_FECHA = /^\d{4}-\d{2}-\d{2}$/;
+const vId = v => (RX_ID.test(String(v ?? '')) ? String(v) : null);
+const vTxt = (v, max = 400) => String(v ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, max);
+const vNum = (v, min = 0, max = 1e12) => { const n = Number(v); return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : 0; };
+const vEnt = (v, min, max) => Math.round(vNum(v, min, max));
+const vFecha = v => {
+  const s = String(v ?? '');
+  if (!RX_FECHA.test(s)) return today();
+  const d = new Date(s + 'T00:00:00Z');
+  return !isNaN(d) && d.toISOString().slice(0, 10) === s ? s : today();
+};
+const vLista = v => (Array.isArray(v) ? v : []);
+function sanearDB(d) {
+  if (!d || typeof d !== 'object' || !Array.isArray(d.cajas) || !Array.isArray(d.socios)) return null;
+  const o = seed(), MAX = 5000;
+  for (const c of vLista(d.cajas).slice(0, MAX)) {
+    const id = vId(c && c.id); if (!id) continue;
+    o.cajas.push({ id, nombre: vTxt(c.nombre, 120), tasa: vNum(c.tasa, 0, 1000), mora: vNum(c.mora, 0, 1000), aporte: vNum(c.aporte) });
+  }
+  const cajas = new Set(o.cajas.map(c => c.id));
+  for (const s of vLista(d.socios).slice(0, MAX)) {
+    const id = vId(s && s.id), cajaId = vId(s && s.cajaId); if (!id || !cajas.has(cajaId)) continue;
+    o.socios.push({ id, cajaId, nombre: vTxt(s.nombre, 120), cedula: vTxt(s.cedula, 30), telefono: vTxt(s.telefono, 30), rol: vTxt(s.rol, 40) || 'Socio' });
+  }
+  const socios = new Set(o.socios.map(s => s.id));
+  for (const p of vLista(d.prestamos).slice(0, MAX)) {
+    const id = vId(p && p.id), cajaId = vId(p && p.cajaId), socioId = vId(p && p.socioId);
+    if (!id || !cajas.has(cajaId) || !socios.has(socioId)) continue;
+    const pagos = [];
+    for (const x of vLista(p.pagos).slice(0, 2000)) {
+      const pid = vId(x && x.id); if (!pid) continue;
+      const pg = { id: pid, fecha: vFecha(x.fecha), monto: vNum(x.monto), mora: vNum(x.mora), nota: vTxt(x.nota, 300) };
+      if (x.img === true) pg.img = true;
+      pagos.push(pg);
+    }
+    o.prestamos.push({
+      id, cajaId, socioId, monto: vNum(p.monto), plazo: vEnt(p.plazo, 1, 600), tasa: vNum(p.tasa, 0, 1000),
+      mora: vNum(p.mora, 0, 1000), metodo: p.metodo === 'frances' ? 'frances' : 'fijo',
+      gracia: vEnt(p.gracia, 0, 120), fecha: vFecha(p.fecha), pagos
+    });
+  }
+  for (const r of vLista(d.reuniones).slice(0, MAX)) {
+    const id = vId(r && r.id), cajaId = vId(r && r.cajaId); if (!id || !cajas.has(cajaId)) continue;
+    const asistentes = [...new Set(vLista(r.asistentes).map(vId).filter(x => x && socios.has(x)))].slice(0, MAX);
+    const aportes = {};
+    const ap = r.aportes && typeof r.aportes === 'object' && !Array.isArray(r.aportes) ? r.aportes : {};
+    for (const k of Object.keys(ap).slice(0, MAX)) { const sid = vId(k); if (sid && socios.has(sid)) aportes[sid] = vNum(ap[k]); }
+    o.reuniones.push({ id, cajaId, fecha: vFecha(r.fecha), lugar: vTxt(r.lugar, 160), asistentes, aportes, acta: vTxt(r.acta, 20000) });
+  }
+  for (const i of vLista(d.ingresos).slice(0, MAX)) {
+    const id = vId(i && i.id), cajaId = vId(i && i.cajaId); if (!id || !cajas.has(cajaId)) continue;
+    o.ingresos.push({ id, cajaId, fecha: vFecha(i.fecha), monto: vNum(i.monto), concepto: vTxt(i.concepto, 200) });
+  }
+  const act = vId(d.cajaActiva);
+  o.cajaActiva = act && cajas.has(act) ? act : (o.cajas[0] ? o.cajas[0].id : null);
+  return o.cajas.length ? o : null;
+}
 function importJSON(inp) {
   const f = inp.files[0]; if (!f) return;
+  if (f.size > 20 * 1024 * 1024) { inp.value = ''; return alert('El archivo es demasiado grande.'); }
   const rd = new FileReader();
   rd.onload = () => {
-    try {
-      const d = JSON.parse(rd.result);
-      if (!Array.isArray(d.cajas) || !Array.isArray(d.socios)) throw 0;
-      if (!confirm('Esto reemplazará todos los datos actuales. ¿Continuar?')) return;
-      db = Object.assign(seed(), d); save(); localStorage.setItem('kq_resp', String(Date.now())); render();
-    } catch (e) { alert('Archivo de respaldo no válido.'); }
+    inp.value = '';
+    let limpio = null;
+    try { limpio = sanearDB(JSON.parse(rd.result)); } catch (e) { limpio = null; }
+    if (!limpio) return alert('Archivo de respaldo no válido.');
+    if (!confirm('Esto reemplazará todos los datos actuales. ¿Continuar?')) return;
+    db = limpio; save(); localStorage.setItem('kq_resp', String(Date.now())); render();
   };
+  rd.onerror = () => { inp.value = ''; alert('No se pudo leer el archivo.'); };
   rd.readAsText(f);
 }
 
