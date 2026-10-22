@@ -1,0 +1,53 @@
+name: Mantener Supabase activa
+
+# El plan gratuito de Supabase pausa el proyecto tras ~7 dias sin actividad.
+# Este flujo hace una consulta diaria para que nunca se pause.
+#
+# Llama a la funcion hay_acceso(), que solo responde si existe una clave de
+# dueno (true/false). No expone datos: las tablas siguen protegidas por RLS.
+# La apikey es la misma clave publica "anon" que ya viaja en app.js.
+#
+# OJO: GitHub desactiva los flujos programados tras 60 dias sin actividad en
+# el repositorio. Si eso pasa, reactivalo desde la pestana Actions.
+
+on:
+  schedule:
+    - cron: '37 14 * * *'   # todos los dias 14:37 UTC (09:37 en Ecuador)
+  workflow_dispatch:         # tambien se puede ejecutar a mano desde Actions
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Consultar la base de datos
+        env:
+          PROYECTO: shcbozuzwzkzphkmjfwo
+          ANON: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNoY2JvenV6d3prenBoa21qZndvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTE0Nzc4ODQsImV4cCI6MjEwNzA1Mzg4NH0.AyQ4J-EBDohVaF1NzOb90K0okk-zhiMUOsosxInotQc
+        run: |
+          set -u
+          URL="https://${PROYECTO}.supabase.co/rest/v1/rpc/hay_acceso"
+          echo "Consultando $URL"
+
+          for intento in 1 2 3; do
+            : > respuesta.txt
+            CODIGO=$(curl -sS -o respuesta.txt -w '%{http_code}' \
+              --max-time 30 \
+              -X POST "$URL" \
+              -H "apikey: ${ANON}" \
+              -H "Authorization: Bearer ${ANON}" \
+              -H 'Content-Type: application/json' \
+              -d '{}' ) || CODIGO=000
+
+            echo "Intento $intento -> HTTP $CODIGO | $(cat respuesta.txt)"
+
+            if [ "$CODIGO" = "200" ]; then
+              echo "Base de datos activa. Todo en orden."
+              exit 0
+            fi
+
+            [ "$intento" -lt 3 ] && sleep 30
+          done
+
+          echo "::error::La base de datos no respondio (HTTP $CODIGO). Puede estar pausada: entra a supabase.com y reactivala."
+          exit 1
