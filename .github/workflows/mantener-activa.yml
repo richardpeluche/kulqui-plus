@@ -1,10 +1,13 @@
 name: Mantener Supabase activa
 
-# El plan gratuito de Supabase pausa el proyecto tras ~7 dias sin actividad.
-# Este flujo hace una consulta diaria para que nunca se pause.
+# El plan gratuito de Supabase pausa el proyecto cuando ve "poca actividad"
+# en los ultimos 7 dias. La documentacion pide "unas cuantas consultas cada
+# dia": una sola consulta diaria NO alcanzo (se pauso el 26-oct-2026).
 #
-# Llama a la funcion hay_acceso(), que solo responde si existe una clave de
-# dueno (true/false). No expone datos: las tablas siguen protegidas por RLS.
+# Ahora corre 4 veces al dia y hace 5 consultas en cada corrida (~20/dia).
+#
+# Llama a hay_acceso(), que solo responde si existe una clave de dueno
+# (true/false). No expone datos: las tablas siguen protegidas por RLS.
 # La apikey es la misma clave publica "anon" que ya viaja en app.js.
 #
 # OJO: GitHub desactiva los flujos programados tras 60 dias sin actividad en
@@ -12,13 +15,17 @@ name: Mantener Supabase activa
 
 on:
   schedule:
-    - cron: '37 14 * * *'   # todos los dias 14:37 UTC (09:37 en Ecuador)
-  workflow_dispatch:         # tambien se puede ejecutar a mano desde Actions
+    - cron: '17 1,7,13,19 * * *'   # cada 6 horas (20:17, 02:17, 08:17, 14:17 en Ecuador)
+  workflow_dispatch:                # tambien se puede ejecutar a mano desde Actions
+
+concurrency:
+  group: mantener-activa
+  cancel-in-progress: false
 
 jobs:
   ping:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - name: Consultar la base de datos
         env:
@@ -27,27 +34,41 @@ jobs:
         run: |
           set -u
           URL="https://${PROYECTO}.supabase.co/rest/v1/rpc/hay_acceso"
-          echo "Consultando $URL"
 
-          for intento in 1 2 3; do
+          consultar() {
             : > respuesta.txt
+            # curl ya imprime 000 si no logra conectarse; no agregar otro codigo
             CODIGO=$(curl -sS -o respuesta.txt -w '%{http_code}' \
               --max-time 30 \
               -X POST "$URL" \
               -H "apikey: ${ANON}" \
               -H "Authorization: Bearer ${ANON}" \
               -H 'Content-Type: application/json' \
-              -d '{}' ) || CODIGO=000
+              -d '{}' 2>/dev/null) || true
+            echo "${CODIGO:-000}"
+          }
 
-            echo "Intento $intento -> HTTP $CODIGO | $(cat respuesta.txt)"
-
-            if [ "$CODIGO" = "200" ]; then
-              echo "Base de datos activa. Todo en orden."
-              exit 0
-            fi
-
+          # 1) Confirmar que responde, con reintentos por si hay un fallo pasajero
+          VIVA=no
+          for intento in 1 2 3; do
+            CODIGO=$(consultar)
+            echo "Comprobacion $intento -> HTTP $CODIGO | $(cat respuesta.txt)"
+            if [ "$CODIGO" = "200" ]; then VIVA=si; break; fi
             [ "$intento" -lt 3 ] && sleep 30
           done
 
-          echo "::error::La base de datos no respondio (HTTP $CODIGO). Puede estar pausada: entra a supabase.com y reactivala."
-          exit 1
+          if [ "$VIVA" != "si" ]; then
+            echo "::error::La base de datos no respondio (HTTP $CODIGO). Puede estar pausada: entra a supabase.com y pulsa 'Resume project'."
+            exit 1
+          fi
+
+          # 2) Generar actividad suficiente: varias consultas espaciadas
+          OK=1
+          for extra in 1 2 3 4; do
+            sleep 20
+            CODIGO=$(consultar)
+            echo "Actividad $extra -> HTTP $CODIGO"
+            [ "$CODIGO" = "200" ] && OK=$((OK+1))
+          done
+
+          echo "Base de datos activa. $OK consultas correctas en esta corrida."
