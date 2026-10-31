@@ -77,3 +77,8 @@ body{padding-bottom:20px}
 body.locked .top{display:none}
 .upd{bottom:16px}
 @media print{.top{display:none!important}}
+
+/* Buscador de la lista de socios */
+.busca{width:100%;box-sizing:border-box;padding:11px 14px;margin:0 0 10px;border:1px solid var(--b);border-radius:10px;font-size:15px;font-family:inherit;background:#fff;color:inherit}
+.busca:focus{outline:2px solid var(--p);outline-offset:-1px}
+@media print{.busca{display:none!important}}

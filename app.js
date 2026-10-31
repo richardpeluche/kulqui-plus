@@ -5,7 +5,7 @@ const SB = 'https://shcbozuzwzkzphkmjfwo.supabase.co/rest/v1/';
 const SBK = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNoY2JvenV6d3prenBoa21qZndvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTE0Nzc4ODQsImV4cCI6MjEwNzA1Mzg4NH0.AyQ4J-EBDohVaF1NzOb90K0okk-zhiMUOsosxInotQc';
 const TBL = ['cajas', 'socios', 'prestamos', 'reuniones', 'ingresos'];
 const TB = {
-  cajas: { to: c => ({ id: c.id, nombre: c.nombre, tasa: c.tasa, mora: c.mora, aporte: c.aporte }), from: r => ({ id: r.id, nombre: r.nombre, tasa: +r.tasa, mora: +r.mora, aporte: +r.aporte }) },
+  cajas: { to: c => ({ id: c.id, nombre: c.nombre, tasa: c.tasa, mora: c.mora, aporte: c.aporte, tope_mora: c.topeMora ?? 100 }), from: r => ({ id: r.id, nombre: r.nombre, tasa: +r.tasa, mora: +r.mora, aporte: +r.aporte, topeMora: r.tope_mora == null ? 100 : +r.tope_mora }) },
   socios: { to: s => ({ id: s.id, caja_id: s.cajaId, nombre: s.nombre, cedula: s.cedula || '', telefono: s.telefono || '', rol: s.rol || 'Socio' }), from: r => ({ id: r.id, cajaId: r.caja_id, nombre: r.nombre, cedula: r.cedula, telefono: r.telefono, rol: r.rol }) },
   prestamos: { to: p => ({ id: p.id, caja_id: p.cajaId, socio_id: p.socioId, monto: p.monto, plazo: p.plazo, tasa: p.tasa, mora: p.mora, metodo: p.metodo, gracia: p.gracia || 0, fecha: p.fecha, pagos: p.pagos }), from: r => ({ id: r.id, cajaId: r.caja_id, socioId: r.socio_id, monto: +r.monto, plazo: r.plazo, tasa: +r.tasa, mora: +r.mora, metodo: r.metodo, gracia: r.gracia, fecha: r.fecha, pagos: r.pagos || [] }) },
   reuniones: { to: r => ({ id: r.id, caja_id: r.cajaId, fecha: r.fecha, lugar: r.lugar || '', asistentes: r.asistentes, aportes: r.aportes, acta: r.acta || '' }), from: r => ({ id: r.id, cajaId: r.caja_id, fecha: r.fecha, lugar: r.lugar, asistentes: r.asistentes || [], aportes: r.aportes || {}, acta: r.acta }) },
@@ -430,6 +430,8 @@ function schedule(p) {
 }
 function info(p) {
   const sch = schedule(p), t = today();
+  const cj = db.cajas.find(x => x.id === p.cajaId);
+  const tope = cj && cj.topeMora != null ? +cj.topeMora : 100;   // % del saldo de la cuota; 0 = sin tope
   let rest = r2(p.pagos.reduce((s, x) => s + x.monto, 0)), mora = 0, capPag = 0, intPag = 0, proxima = null;
   sch.forEach(c => {
     c.pagado = r2(Math.min(c.total, rest)); rest = r2(rest - c.pagado);
@@ -438,6 +440,7 @@ function info(p) {
     capPag += c.capital * f; intPag += c.interes * f;
     c.dias = c.pend > 0 ? Math.max(0, daysBetween(c.fecha, t) - (p.gracia || 0)) : 0;
     c.mora = c.pend > 0 && c.dias > 0 ? r2(c.pend * (p.mora / 100) * c.dias / 30) : 0;
+    if (tope > 0) c.mora = Math.min(c.mora, r2(c.pend * tope / 100));
     c.estado = c.pend <= 0 ? 'Pagada' : c.fecha < t ? 'Vencida' : c.pagado > 0 ? 'Parcial' : 'Pendiente';
     mora += c.mora;
     if (!proxima && c.pend > 0) proxima = c;
@@ -462,6 +465,18 @@ function stats(cajaId) {
   const efectivo = r2(aportes + ingresos - desembolsado + cobrado + mora);
   return { aportes: r2(aportes), ingresos: r2(ingresos), desembolsado, utilidad, efectivo, prestado: r2(saldoCap), fondo: r2(efectivo + saldoCap), interes: r2(interes), mora: r2(mora) };
 }
+// Digito verificador de la cedula ecuatoriana (modulo 10)
+function cedulaOk(v) {
+  const c = String(v ?? '').replace(/\D/g, '');
+  if (c.length !== 10) return false;
+  const prov = +c.slice(0, 2);
+  if (prov < 1 || (prov > 24 && prov !== 30)) return false;
+  if (+c[2] > 5) return false;
+  let suma = 0;
+  for (let k = 0; k < 9; k++) { let x = +c[k] * (k % 2 === 0 ? 2 : 1); if (x > 9) x -= 9; suma += x; }
+  return (10 - (suma % 10)) % 10 === +c[9];
+}
+const norm = t => String(t ?? '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 const aporteSocio = (cajaId, sid) => db.reuniones.filter(r => r.cajaId === cajaId).reduce((s, r) => s + (r.aportes[sid] || 0), 0);
 const cajaActual = () => db.cajas.find(c => c.id === db.cajaActiva) || db.cajas[0];
 const socioNombre = id => (db.socios.find(s => s.id === id) || { nombre: '(eliminado)' }).nombre;
@@ -475,13 +490,15 @@ const fv = (f, n) => f.elements[n].value;
 
 /* ===== Cajas ===== */
 function formCaja(c) {
-  c = c || { nombre: '', tasa: 2, mora: 5, aporte: 5 };
+  c = c || { nombre: '', tasa: 2, mora: 5, aporte: 5, topeMora: 100 };
   return `<h2>${c.id ? 'Editar caja' : 'Nueva caja comunal'}</h2>
   <form onsubmit="guardarCaja(event,'${c.id || ''}')">
     <label>Nombre de la caja</label><input name="nombre" required value="${esc(c.nombre)}">
     <div class="two"><div><label>Interés mensual por defecto (%)</label><input name="tasa" inputmode="decimal" value="${c.tasa}"></div>
     <div><label>Mora mensual por defecto (%)</label><input name="mora" inputmode="decimal" value="${c.mora}"></div></div>
-    <label>Aporte sugerido por reunión ($)</label><input name="aporte" inputmode="decimal" value="${c.aporte}">
+    <div class="two"><div><label>Aporte sugerido por reunión ($)</label><input name="aporte" inputmode="decimal" value="${c.aporte}"></div>
+    <div><label>Tope de mora (% de la cuota)</label><input name="topeMora" inputmode="decimal" value="${c.topeMora ?? 100}"></div></div>
+    <div class="m">La mora nunca pasará de ese porcentaje del saldo de la cuota. Escribe 0 para no poner tope.</div>
     <div class="bar"><button>Guardar</button><button type="button" class="sec" onclick="closeModal()">Cancelar</button></div>
   </form>` + (c.id ? formIngresos(c.id) : '');
 }
@@ -509,7 +526,7 @@ function borrarIngreso(id) {
 }
 function guardarCaja(e, id) {
   e.preventDefault(); const f = e.target;
-  const d = { nombre: fv(f, 'nombre').trim(), tasa: num(fv(f, 'tasa')), mora: num(fv(f, 'mora')), aporte: num(fv(f, 'aporte')) };
+  const d = { nombre: fv(f, 'nombre').trim(), tasa: num(fv(f, 'tasa')), mora: num(fv(f, 'mora')), aporte: num(fv(f, 'aporte')), topeMora: Math.max(0, num(fv(f, 'topeMora'))) };
   if (id) Object.assign(db.cajas.find(c => c.id === id), d);
   else { const c = { id: uid(), ...d }; db.cajas.push(c); db.cajaActiva = c.id; }
   save(); closeModal(); render();
@@ -537,6 +554,8 @@ function formSocio(id) {
 function guardarSocio(e, id) {
   e.preventDefault(); const f = e.target;
   const d = { nombre: fv(f, 'nombre').trim(), cedula: fv(f, 'cedula').trim(), telefono: fv(f, 'telefono').trim(), rol: fv(f, 'rol') };
+  if (!d.nombre) return alert('Escribe el nombre del socio.');
+  if (d.cedula && !cedulaOk(d.cedula) && !confirm('La cédula no parece válida. ¿Guardar de todas formas?')) return;
   if (id) Object.assign(db.socios.find(s => s.id === id), d);
   else db.socios.push({ id: uid(), cajaId: cajaActual().id, ...d });
   save(); closeModal(); render();
@@ -660,9 +679,10 @@ function borrarPrestamo(id) {
   if (!confirm('¿Eliminar préstamo y sus pagos?')) return;
   db.prestamos = db.prestamos.filter(p => p.id !== id); save(); imgLimpiar(); location.hash = '#/prestamos';
 }
+const waNumero = tel => { let t = String(tel ?? '').replace(/\D/g, ''); if (t.startsWith('0')) t = '593' + t.slice(1); return t; };
 function waLink(p, i) {
   const s = db.socios.find(x => x.id === p.socioId); if (!s || !s.telefono || !i.proxima) return '';
-  let t = s.telefono.replace(/\D/g, ''); if (t.startsWith('0')) t = '593' + t.slice(1);
+  const t = waNumero(s.telefono);
   const msg = `Hola ${s.nombre.split(' ')[0]}, te recordamos tu cuota #${i.proxima.n} de ${money(i.proxima.pend)} con vencimiento ${fdate(i.proxima.fecha)}${i.moraDebe ? ` (mora: ${money(i.moraDebe)})` : ''}. ${cajaActual().nombre}.`;
   return `https://wa.me/${t}?text=${encodeURIComponent(msg)}`;
 }
@@ -758,7 +778,7 @@ function sanearDB(d) {
   const o = seed(), MAX = 5000;
   for (const c of vLista(d.cajas).slice(0, MAX)) {
     const id = vId(c && c.id); if (!id) continue;
-    o.cajas.push({ id, nombre: vTxt(c.nombre, 120), tasa: vNum(c.tasa, 0, 1000), mora: vNum(c.mora, 0, 1000), aporte: vNum(c.aporte) });
+    o.cajas.push({ id, nombre: vTxt(c.nombre, 120), tasa: vNum(c.tasa, 0, 1000), mora: vNum(c.mora, 0, 1000), aporte: vNum(c.aporte), topeMora: c.topeMora == null ? 100 : vNum(c.topeMora, 0, 10000) });
   }
   const cajas = new Set(o.cajas.map(c => c.id));
   for (const s of vLista(d.socios).slice(0, MAX)) {
@@ -824,18 +844,63 @@ function vInicio(c) {
   const lim = addMonths(today(), 0).slice(0, 8) + '99';
   return licCard() + respCard() + `<div class="grid">
     <div class="stat"><small>Fondo total</small><b>${money(st.fondo)}</b></div>
-    <div class="stat"><small>Efectivo en caja</small><b>${money(st.efectivo)}</b></div>
+    <div class="stat"><small>Efectivo en caja</small><b class="${st.efectivo < 0 ? 'neg' : ''}">${money(st.efectivo)}</b></div>
     <div class="stat"><small>Prestado vigente</small><b>${money(st.prestado)}</b></div>
     <div class="stat"><small>Utilidad generada</small><b class="pos">${money(st.utilidad)}</b></div></div>
   <h2>Próximos cobros</h2><div class="card">${prox.length ? prox.slice(0, 12).map(({ p, i }) => `<div class="row rowlink"><a href="#/prestamo/${p.id}"><b>${esc(socioNombre(p.socioId))}</b><div class="m">Cuota ${i.proxima.n} · ${fdate(i.proxima.fecha)}</div></a><div style="text-align:right">${money(i.proxima.pend)}<div>${badge(i.estado === 'En mora' ? 'En mora' : i.proxima.estado)}</div></div></div>`).join('') : '<div class="empty">Sin cobros pendientes</div>'}</div>
   <div class="bar"><button class="sm" onclick="cargaMasiva()">Carga masiva (Excel)</button><button class="sec sm" onclick="openModal(formCaja(cajaActual()))">Editar caja</button><button class="sec sm" onclick="openModal(formCaja())">+ Otra caja</button><button class="del sm" onclick="borrarCaja('${c.id}')">Eliminar caja</button></div>`;
 }
+let buscaSocio = '';
+function filtrarSocios(q) {
+  buscaSocio = q;
+  const t = norm(q).trim(), filas = document.querySelectorAll('#listaSocios .row');
+  let vistas = 0;
+  filas.forEach(el => { const ok = !t || norm(el.dataset.busca).includes(t); el.hidden = !ok; if (ok) vistas++; });
+  const vacio = $('#sinSocios'); if (vacio) vacio.hidden = vistas > 0 || !filas.length;
+}
 function vSocios(c) {
   const l = db.socios.filter(s => s.cajaId === c.id);
-  return `<div class="bar"><button onclick="openModal(formSocio())">+ Nuevo socio</button></div><div class="card">${l.length ? l.map(s => {
+  setTimeout(() => filtrarSocios(buscaSocio), 0);
+  return `<div class="bar"><button onclick="openModal(formSocio())">+ Nuevo socio</button></div>
+  ${l.length > 5 ? `<input id="buscaSocio" class="busca" placeholder="Buscar por nombre, cédula o teléfono" value="${esc(buscaSocio)}" oninput="filtrarSocios(this.value)">` : ''}
+  <div class="card" id="listaSocios">${l.length ? l.map(s => {
     const deuda = db.prestamos.filter(p => p.socioId === s.id).reduce((a, p) => a + info(p).saldoTot, 0);
-    return `<div class="row" onclick="openModal(formSocio('${s.id}'))" style="cursor:pointer"><div><b>${esc(s.nombre)}</b> <span class="badge">${esc(s.rol)}</span><div class="m">${esc(s.telefono)}</div></div><div style="text-align:right"><div>Aportes ${money(aporteSocio(c.id, s.id))}</div><div class="m">Debe ${money(deuda)}</div></div></div>`;
-  }).join('') : '<div class="empty">Aún no hay socios</div>'}</div>`;
+    return `<div class="row rowlink" data-busca="${esc(s.nombre + ' ' + (s.cedula || '') + ' ' + (s.telefono || ''))}"><a href="#/socio/${s.id}"><b>${esc(s.nombre)}</b> <span class="badge">${esc(s.rol)}</span><div class="m">${esc(s.telefono)}</div></a><div style="text-align:right"><div>Aportes ${money(aporteSocio(c.id, s.id))}</div><div class="m">Debe ${money(deuda)}</div></div></div>`;
+  }).join('') + '<div class="empty" id="sinSocios" hidden>Ningún socio coincide con la búsqueda</div>' : '<div class="empty">Aún no hay socios</div>'}</div>`;
+}
+function vSocio(id) {
+  const s = db.socios.find(x => x.id === id);
+  if (!s) return '<div class="empty">No encontrado</div>';
+  const c = db.cajas.find(x => x.id === s.cajaId) || cajaActual();
+  const r = reparto(c.id).find(x => x.s.id === id) || { ap: 0, pct: 0, ut: 0, total: 0, deuda: 0 };
+  const reus = db.reuniones.filter(x => x.cajaId === c.id && x.aportes && x.aportes[id] > 0)
+    .slice().sort((a, b) => a.fecha.localeCompare(b.fecha));
+  const prs = db.prestamos.filter(p => p.socioId === id).map(p => ({ p, i: info(p) }))
+    .sort((a, b) => b.p.fecha.localeCompare(a.p.fecha));
+  const pagos = [];
+  prs.forEach(({ p }) => (p.pagos || []).forEach(x => pagos.push({ p, x })));
+  pagos.sort((a, b) => b.x.fecha.localeCompare(a.x.fecha));
+  const asistio = db.reuniones.filter(x => x.cajaId === c.id && (x.asistentes || []).includes(id)).length;
+  const totalReu = db.reuniones.filter(x => x.cajaId === c.id).length;
+  const moraDebe = r2(prs.reduce((a, { i }) => a + i.moraDebe, 0));
+
+  return `<a href="#/socios" class="m noprint">← Socios</a>
+  <div class="card"><h2 style="margin-top:0">${esc(s.nombre)} <span class="badge">${esc(s.rol)}</span></h2>
+    <div class="m">${esc(c.nombre)} · Estado de cuenta al ${fdate(today())}${s.cedula ? ' · C.I. ' + esc(s.cedula) : ''}${s.telefono ? ' · ' + esc(s.telefono) : ''}</div>
+    <div class="grid" style="margin-top:10px">
+      <div class="stat"><small>Aportes acumulados</small><b>${money(r.ap)}</b></div>
+      <div class="stat"><small>Utilidad que le toca</small><b class="pos">${money(r.ut)}</b></div>
+      <div class="stat"><small>A recibir en la liquidación</small><b>${money(r.total)}</b></div>
+      <div class="stat"><small>Deuda vigente</small><b class="${r.deuda ? 'neg' : ''}">${money(r.deuda)}</b></div></div>
+    <div class="m" style="margin-top:8px">Participación en el fondo: <b>${(r.pct * 100).toFixed(1)}%</b> · Asistencia: <b>${asistio} de ${totalReu}</b> ${totalReu === 1 ? 'reunión' : 'reuniones'}${moraDebe ? ` · Mora pendiente: <b class="neg">${money(moraDebe)}</b>` : ''}</div>
+    <div class="bar noprint"><button onclick="window.print()">Imprimir / PDF</button><button class="sec" onclick="openModal(formSocio('${s.id}'))">Editar socio</button>${s.telefono ? `<a class="btn sec" style="background:transparent;color:var(--p);border:1px solid var(--p)" href="https://wa.me/${waNumero(s.telefono)}?text=${encodeURIComponent(`Hola ${s.nombre.split(' ')[0]}, tu estado de cuenta en ${c.nombre}: aportes ${money(r.ap)}, utilidad ${money(r.ut)}, a recibir ${money(r.total)}${r.deuda ? `, deuda vigente ${money(r.deuda)}` : ''}.`)}" target="_blank" rel="noopener">Enviar por WhatsApp</a>` : ''}</div></div>
+
+  <h2>Aportes por reunión</h2><div class="card">${reus.length ? reus.map(x => `<div class="row"><div>${fdate(x.fecha)}<div class="m">${esc(x.lugar || '')}${(x.asistentes || []).includes(id) ? '' : ' · no asistió'}</div></div><b>${money(x.aportes[id])}</b></div>`).join('') + `<div class="row"><b>Total aportado</b><b>${money(r.ap)}</b></div>` : '<div class="empty">Sin aportes registrados</div>'}</div>
+
+  <h2>Préstamos</h2><div class="card">${prs.length ? prs.map(({ p, i }) => `<div class="row rowlink"><a href="#/prestamo/${p.id}"><b>${money(p.monto)}</b> · ${p.plazo} meses · ${p.tasa}% ${p.metodo === 'fijo' ? 'fijo' : 'francés'}<div class="m">Desde ${fdate(p.fecha)}</div></a><div style="text-align:right">${money(i.saldoTot)}<div>${badge(i.estado)}</div></div></div>`).join('') : '<div class="empty">Nunca ha pedido un préstamo</div>'}</div>
+
+  <h2>Pagos realizados</h2><div class="card scroll">${pagos.length ? `<table><tr><th class="l">Fecha</th><th>Cuota</th><th>Mora</th><th>Total</th></tr>${pagos.map(({ x }) => `<tr><td class="l">${fdate(x.fecha)}</td><td>${money(x.monto)}</td><td>${x.mora ? money(x.mora) : '—'}</td><td><b>${money(r2(x.monto + (x.mora || 0)))}</b></td></tr>`).join('')}<tr><th class="l">Total pagado</th><th>${money(r2(pagos.reduce((a, { x }) => a + x.monto, 0)))}</th><th>${money(r2(pagos.reduce((a, { x }) => a + (x.mora || 0), 0)))}</th><th>${money(r2(pagos.reduce((a, { x }) => a + x.monto + (x.mora || 0), 0)))}</th></tr></table>` : '<div class="empty">Sin pagos registrados</div>'}</div>
+  <p class="m">La utilidad se reparte según el aporte de cada socio y puede variar hasta la liquidación.</p>`;
 }
 function vPrestamos(c) {
   const l = db.prestamos.filter(p => p.cajaId === c.id).map(p => ({ p, i: info(p) }));
@@ -874,7 +939,7 @@ function vReportes(c) {
   const mor = db.prestamos.filter(p => p.cajaId === c.id).map(p => ({ p, i: info(p) })).filter(x => x.i.estado === 'En mora');
   return `<div class="card"><h2 style="margin-top:0">Balance · ${esc(c.nombre)}</h2><div class="m">Al ${fdate(today())}</div>
   <table><tr><td class="l">Aportes de socios</td><td>${money(st.aportes)}</td></tr><tr><td class="l">Ingresos al fondo</td><td>${money(st.ingresos)}</td></tr><tr><td class="l">Total desembolsado</td><td>- ${money(st.desembolsado)}</td></tr><tr><td class="l">Capital recuperado</td><td>${money(st.desembolsado - st.prestado)}</td></tr><tr><td class="l">Intereses cobrados</td><td>${money(st.interes)}</td></tr><tr><td class="l">Mora cobrada</td><td>${money(st.mora)}</td></tr>
-  <tr><th class="l">Efectivo en caja</th><th>${money(st.efectivo)}</th></tr><tr><td class="l">Cartera vigente (capital)</td><td>${money(st.prestado)}</td></tr><tr><th class="l">Fondo total</th><th>${money(st.fondo)}</th></tr></table></div>
+  <tr><th class="l">Efectivo en caja</th><th class="${st.efectivo < 0 ? 'neg' : ''}">${money(st.efectivo)}</th></tr><tr><td class="l">Cartera vigente (capital)</td><td>${money(st.prestado)}</td></tr><tr><th class="l">Fondo total</th><th>${money(st.fondo)}</th></tr></table></div>
   <h2>Reparto de utilidades</h2><div class="card scroll"><table><tr><th class="l">Socio</th><th>Aportes</th><th>%</th><th>Utilidad</th><th>A recibir</th><th>Debe</th></tr>
   ${rep.map(r => `<tr><td class="l">${esc(r.s.nombre)}</td><td>${money(r.ap)}</td><td>${(r.pct * 100).toFixed(1)}</td><td>${money(r.ut)}</td><td><b>${money(r.total)}</b></td><td>${money(r.deuda)}</td></tr>`).join('')}</table>
   <p class="m">Utilidad = intereses + mora cobrados, repartida según el aporte de cada socio.</p></div>
@@ -886,13 +951,13 @@ function vReportes(c) {
 function render() {
   if (locked) return;
   const [v, id] = (location.hash || '#/inicio').slice(2).split('/');
-  const base = { prestamo: 'prestamos', reunion: 'reuniones' }[v] || v;
+  const base = { prestamo: 'prestamos', reunion: 'reuniones', socio: 'socios' }[v] || v;
   document.querySelectorAll('nav a').forEach(a => a.classList.toggle('on', a.dataset.v === base));
   const sel = $('#cajaSel');
   sel.innerHTML = db.cajas.map(c => `<option value="${c.id}" ${c.id === cajaActual()?.id ? 'selected' : ''}>${esc(c.nombre)}</option>`).join('') || '<option>Sin cajas</option>';
   const c = cajaActual(), el = $('#app');
   if (!c && v !== 'reportes') { el.innerHTML = `<div class="card"><h2 style="margin-top:0">Crea tu primera caja comunal</h2>${formCaja()}</div>`; return; }
-  const views = { inicio: () => vInicio(c), socios: () => vSocios(c), prestamos: () => vPrestamos(c), prestamo: () => vPrestamo(id), reuniones: () => vReuniones(c), reunion: () => vReunion(id), reportes: () => vReportes(c) };
+  const views = { inicio: () => vInicio(c), socios: () => vSocios(c), socio: () => vSocio(id), prestamos: () => vPrestamos(c), prestamo: () => vPrestamo(id), reuniones: () => vReuniones(c), reunion: () => vReunion(id), reportes: () => vReportes(c) };
   el.innerHTML = (views[v] || views.inicio)();
   window.scrollTo(0, 0);
 }
