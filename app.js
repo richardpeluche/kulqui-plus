@@ -386,7 +386,25 @@ const r2 = n => Math.round((n + Number.EPSILON) * 100) / 100;
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const today = () => { const d = new Date(); return new Date(d - d.getTimezoneOffset() * 6e4).toISOString().slice(0, 10); };
 const fdate = d => d ? new Date(d + 'T00:00:00').toLocaleDateString('es-EC', { day: '2-digit', month: 'short', year: 'numeric' }) : '';
-const num = v => parseFloat(String(v).replace(',', '.')) || 0;
+// Acepta el monto escrito como lo muestra la app ($1.050,00) y tambien 1050.50
+const num = v => {
+  if (typeof v === 'number') return Number.isFinite(v) ? v : 0;
+  let s = String(v ?? '').replace(/[^\d.,-]/g, '');
+  if (!s) return 0;
+  const neg = /-/.test(s); s = s.replace(/-/g, '');
+  const uPto = s.lastIndexOf('.'), uCma = s.lastIndexOf(','), sep = Math.max(uPto, uCma);
+  let ent = s, dec = '';
+  if (sep >= 0) {
+    const cabeza = s.slice(0, sep), cola = s.slice(sep + 1), unico = uPto < 0 || uCma < 0;
+    // Un solo separador con 3 digitos detras = separador de miles (1.050 son mil cincuenta),
+    // salvo que la parte entera sea 0, donde 0,500 son cincuenta centavos.
+    if (unico && /^\d{3}$/.test(cola) && cabeza !== '' && cabeza.replace(/[.,]/g, '') !== '0') {
+      ent = s.replace(/[.,]/g, '');
+    } else { ent = cabeza.replace(/[.,]/g, ''); dec = cola.replace(/[.,]/g, ''); }
+  }
+  const n = parseFloat((ent || '0') + (dec ? '.' + dec : ''));
+  return Number.isFinite(n) ? (neg ? -n : n) : 0;
+};
 function addMonths(ds, n) {
   const [y, m, d] = ds.split('-').map(Number);
   const x = new Date(y, m - 1 + n, d);
@@ -500,7 +518,7 @@ function borrarCaja(id) {
   if (!confirm('Se borrará la caja con todos sus socios, préstamos y reuniones. ¿Continuar?')) return;
   db.cajas = db.cajas.filter(c => c.id !== id);
   ['socios', 'prestamos', 'reuniones', 'ingresos'].forEach(k => db[k] = db[k].filter(x => x.cajaId !== id));
-  db.cajaActiva = db.cajas[0]?.id || null; save(); closeModal(); render();
+  db.cajaActiva = db.cajas[0]?.id || null; save(); imgLimpiar(); closeModal(); render();
 }
 
 /* ===== Socios ===== */
@@ -525,8 +543,16 @@ function guardarSocio(e, id) {
 }
 function borrarSocio(id) {
   if (db.prestamos.some(p => p.socioId === id)) return alert('El socio tiene préstamos registrados; no se puede eliminar.');
-  if (!confirm('¿Eliminar socio?')) return;
-  db.socios = db.socios.filter(s => s.id !== id); save(); closeModal(); render();
+  const ap = r2(db.reuniones.reduce((a, r) => a + ((r.aportes && r.aportes[id]) || 0), 0));
+  if (!confirm(ap > 0
+    ? `Este socio tiene ${money(ap)} en aportes. Al eliminarlo se descontarán del fondo y se recalculará el reparto de utilidades. ¿Continuar?`
+    : '¿Eliminar socio?')) return;
+  db.socios = db.socios.filter(s => s.id !== id);
+  db.reuniones.forEach(r => {
+    if (r.aportes) delete r.aportes[id];
+    if (Array.isArray(r.asistentes)) r.asistentes = r.asistentes.filter(x => x !== id);
+  });
+  save(); closeModal(); render();
 }
 
 /* ===== Préstamos ===== */
@@ -569,6 +595,15 @@ const imgGuardar = (id, blob) => idbOp('readwrite', s => s.put(blob, id));
 const imgLeer = id => idbOp('readonly', s => s.get(id));
 const imgBorrar = id => idbOp('readwrite', s => s.delete(id)).catch(() => { });
 const imgVaciar = () => idbOp('readwrite', s => s.clear()).catch(() => { });
+// Borra las fotos que ya no pertenecen a ningun pago (prestamos o cajas eliminados)
+const imgLimpiar = async () => {
+  try {
+    const vivos = new Set();
+    db.prestamos.forEach(p => (p.pagos || []).forEach(x => { if (x.img) vivos.add(x.id); }));
+    const claves = await idbOp('readonly', s => s.getAllKeys()) || [];
+    for (const k of claves) if (!vivos.has(k)) await imgBorrar(k);
+  } catch (e) { }
+};
 function reducirImagen(file, max = 1280) {
   return new Promise((ok, no) => {
     const url = URL.createObjectURL(file), im = new Image();
@@ -623,7 +658,7 @@ function borrarPago(pid, id) {
 }
 function borrarPrestamo(id) {
   if (!confirm('¿Eliminar préstamo y sus pagos?')) return;
-  db.prestamos = db.prestamos.filter(p => p.id !== id); save(); location.hash = '#/prestamos';
+  db.prestamos = db.prestamos.filter(p => p.id !== id); save(); imgLimpiar(); location.hash = '#/prestamos';
 }
 function waLink(p, i) {
   const s = db.socios.find(x => x.id === p.socioId); if (!s || !s.telefono || !i.proxima) return '';
@@ -773,7 +808,7 @@ function importJSON(inp) {
     try { limpio = sanearDB(JSON.parse(rd.result)); } catch (e) { limpio = null; }
     if (!limpio) return alert('Archivo de respaldo no válido.');
     if (!confirm('Esto reemplazará todos los datos actuales. ¿Continuar?')) return;
-    db = limpio; save(); localStorage.setItem('kq_resp', String(Date.now())); render();
+    db = limpio; save(); imgLimpiar(); localStorage.setItem('kq_resp', String(Date.now())); render();
   };
   rd.onerror = () => { inp.value = ''; alert('No se pudo leer el archivo.'); };
   rd.readAsText(f);
