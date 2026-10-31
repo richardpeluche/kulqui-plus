@@ -792,7 +792,7 @@ function vInicio(c) {
     <div class="stat"><small>Efectivo en caja</small><b>${money(st.efectivo)}</b></div>
     <div class="stat"><small>Prestado vigente</small><b>${money(st.prestado)}</b></div>
     <div class="stat"><small>Utilidad generada</small><b class="pos">${money(st.utilidad)}</b></div></div>
-  <h2>Próximos cobros</h2><div class="card">${prox.length ? prox.slice(0, 12).map(({ p, i }) => `<div class="row"><a href="#/prestamo/${p.id}"><b>${esc(socioNombre(p.socioId))}</b><div class="m">Cuota ${i.proxima.n} · ${fdate(i.proxima.fecha)}</div></a><div style="text-align:right">${money(i.proxima.pend)}<div>${badge(i.estado === 'En mora' ? 'En mora' : i.proxima.estado)}</div></div></div>`).join('') : '<div class="empty">Sin cobros pendientes</div>'}</div>
+  <h2>Próximos cobros</h2><div class="card">${prox.length ? prox.slice(0, 12).map(({ p, i }) => `<div class="row rowlink"><a href="#/prestamo/${p.id}"><b>${esc(socioNombre(p.socioId))}</b><div class="m">Cuota ${i.proxima.n} · ${fdate(i.proxima.fecha)}</div></a><div style="text-align:right">${money(i.proxima.pend)}<div>${badge(i.estado === 'En mora' ? 'En mora' : i.proxima.estado)}</div></div></div>`).join('') : '<div class="empty">Sin cobros pendientes</div>'}</div>
   <div class="bar"><button class="sm" onclick="cargaMasiva()">Carga masiva (Excel)</button><button class="sec sm" onclick="openModal(formCaja(cajaActual()))">Editar caja</button><button class="sec sm" onclick="openModal(formCaja())">+ Otra caja</button><button class="del sm" onclick="borrarCaja('${c.id}')">Eliminar caja</button></div>`;
 }
 function vSocios(c) {
@@ -805,7 +805,7 @@ function vSocios(c) {
 function vPrestamos(c) {
   const l = db.prestamos.filter(p => p.cajaId === c.id).map(p => ({ p, i: info(p) }));
   l.sort((a, b) => (a.i.estado === 'Cancelado') - (b.i.estado === 'Cancelado') || b.p.fecha.localeCompare(a.p.fecha));
-  return `<div class="bar"><button onclick="openModal(formPrestamo())">+ Nuevo préstamo</button></div><div class="card">${l.length ? l.map(({ p, i }) => `<div class="row"><a href="#/prestamo/${p.id}"><b>${esc(socioNombre(p.socioId))}</b><div class="m">${money(p.monto)} · ${p.plazo} meses · ${fdate(p.fecha)}</div></a><div style="text-align:right">${money(i.saldoTot)}<div>${badge(i.estado)}</div></div></div>`).join('') : '<div class="empty">Sin préstamos</div>'}</div>`;
+  return `<div class="bar"><button onclick="openModal(formPrestamo())">+ Nuevo préstamo</button></div><div class="card">${l.length ? l.map(({ p, i }) => `<div class="row rowlink"><a href="#/prestamo/${p.id}"><b>${esc(socioNombre(p.socioId))}</b><div class="m">${money(p.monto)} · ${p.plazo} meses · ${fdate(p.fecha)}</div></a><div style="text-align:right">${money(i.saldoTot)}<div>${badge(i.estado)}</div></div></div>`).join('') : '<div class="empty">Sin préstamos</div>'}</div>`;
 }
 function vPrestamo(id) {
   const p = db.prestamos.find(x => x.id === id); if (!p) return '<div class="empty">No encontrado</div>';
@@ -821,7 +821,7 @@ function vPrestamo(id) {
 }
 function vReuniones(c) {
   const l = db.reuniones.filter(r => r.cajaId === c.id).sort((a, b) => b.fecha.localeCompare(a.fecha));
-  return `<div class="bar"><button onclick="openModal(formReunion())">+ Nueva reunión</button></div><div class="card">${l.length ? l.map(r => `<div class="row"><a href="#/reunion/${r.id}"><b>${fdate(r.fecha)}</b><div class="m">${esc(r.lugar)} · ${r.asistentes.length} asistentes</div></a><b>${money(Object.values(r.aportes).reduce((a, b) => a + b, 0))}</b></div>`).join('') : '<div class="empty">Sin reuniones</div>'}</div>`;
+  return `<div class="bar"><button onclick="openModal(formReunion())">+ Nueva reunión</button></div><div class="card">${l.length ? l.map(r => `<div class="row rowlink"><a href="#/reunion/${r.id}"><b>${fdate(r.fecha)}</b><div class="m">${esc(r.lugar)} · ${r.asistentes.length} asistentes</div></a><b>${money(Object.values(r.aportes).reduce((a, b) => a + b, 0))}</b></div>`).join('') : '<div class="empty">Sin reuniones</div>'}</div>`;
 }
 function vReunion(id) {
   const r = db.reuniones.find(x => x.id === id); if (!r) return '<div class="empty">No encontrada</div>';
@@ -843,7 +843,7 @@ function vReportes(c) {
   <h2>Reparto de utilidades</h2><div class="card scroll"><table><tr><th class="l">Socio</th><th>Aportes</th><th>%</th><th>Utilidad</th><th>A recibir</th><th>Debe</th></tr>
   ${rep.map(r => `<tr><td class="l">${esc(r.s.nombre)}</td><td>${money(r.ap)}</td><td>${(r.pct * 100).toFixed(1)}</td><td>${money(r.ut)}</td><td><b>${money(r.total)}</b></td><td>${money(r.deuda)}</td></tr>`).join('')}</table>
   <p class="m">Utilidad = intereses + mora cobrados, repartida según el aporte de cada socio.</p></div>
-  <h2>Cartera en mora</h2><div class="card">${mor.length ? mor.map(({ p, i }) => `<div class="row"><a href="#/prestamo/${p.id}">${esc(socioNombre(p.socioId))}</a><div style="text-align:right">${money(i.saldoTot)}<div class="m neg">mora ${money(i.moraDebe)}</div></div></div>`).join('') : '<div class="empty">Sin mora</div>'}</div>
+  <h2>Cartera en mora</h2><div class="card">${mor.length ? mor.map(({ p, i }) => `<div class="row rowlink"><a href="#/prestamo/${p.id}">${esc(socioNombre(p.socioId))}</a><div style="text-align:right">${money(i.saldoTot)}<div class="m neg">mora ${money(i.moraDebe)}</div></div></div>`).join('') : '<div class="empty">Sin mora</div>'}</div>
   <div class="bar noprint"><button onclick="window.print()">Imprimir / PDF</button><button class="sec" onclick="exportCSV()">Exportar CSV</button><button class="sec" onclick="exportJSON()">Respaldo</button>${modo === 'nube' ? '<button class="sec" onclick="openModal(formClave())">Cambiar contraseña</button><button class="sec" onclick="abrirLicencias()">Licencias</button>' : ''}<label class="btn sec" style="border:1px solid var(--p);color:var(--p);background:transparent">Restaurar<input type="file" accept=".json" hidden onchange="importJSON(this)"></label></div>` + cuentaCard();
 }
 

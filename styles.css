@@ -18,6 +18,11 @@ h2{font-size:17px;margin:18px 0 8px}
 .row{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--b)}
 .row:last-child{border-bottom:0}
 .row a{color:inherit;text-decoration:none}
+/* Fila enlazada: toda la tarjeta abre el detalle, no solo el nombre */
+.row.rowlink{position:relative;cursor:pointer}
+.row.rowlink>a:first-child::after{content:"";position:absolute;inset:0;z-index:1}
+.row.rowlink:hover{background:rgba(15,118,110,.07)}
+.row.rowlink:active{background:rgba(15,118,110,.14)}
 .m{color:var(--m);font-size:13px}
 .badge{display:inline-block;padding:2px 8px;border-radius:99px;font-size:12px;font-weight:700;background:#e2e8f0;color:#334155}
 .badge.ok{background:#dcfce7;color:var(--ok)}.badge.warn{background:#fef3c7;color:var(--warn)}.badge.bad{background:#fee2e2;color:var(--bad)}
